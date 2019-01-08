@@ -26,6 +26,12 @@ debug: bool = False
 configfile = '~/.oci/config.ini'
 
 
+# Print headings
+def print_balance_header():
+	print("{:24s}{:30s}{:10s}{:>11s}{:>11s}{:>12s}".format(
+		'Time', 'Tenant', 'Currency', 'Purchased', 'Balance', 'Consumed'))
+
+
 # Use the Oracle REST API to get the account balance for the given tenancy
 def get_account_balance(report_time, tenant, username, password, domain, idcs_guid):
 
@@ -69,12 +75,11 @@ if __name__ == "__main__":
 	config = configparser.ConfigParser()
 	config.read(configfile)
 
-	# Print Header
-	print("{:24s}{:30s}{:10s}{:>11s}{:>11s}{:>12s}".format(
-		'Time', 'Tenant', 'Currency', 'Purchased', 'Balance', 'Consumed'))
-
 	# Timestamp
 	report_time = datetime.datetime.now()
+
+	# Print headings
+	print_balance_header()
 
 	# For each tenant in the config file
 	for tenant in config.sections():
