@@ -12,7 +12,7 @@
 #
 import requests
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 import configparser
 import os
 
@@ -81,11 +81,12 @@ if __name__ == "__main__":
 	ini_data = config[profile_name]
 
 	# Show usage details
+	# Set time component of end date to 23:59:59 to match the behaviour of the Oracle my-services dashboard
 	usage = get_account_charges(
 		ini_data['username'], ini_data['password'],
 		ini_data['domain'], ini_data['idcs_guid'],
 		datetime.strptime(start_date, '%d-%m-%Y'),
-		datetime.strptime(end_date, '%d-%m-%Y'))
+		datetime.strptime(end_date, '%d-%m-%Y') + timedelta(days=1, seconds=-1))
 
 	# Simple output as I use it to feed a report
 	print('{:24s} {:6.2f}'.format(profile_name, usage))
