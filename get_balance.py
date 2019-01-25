@@ -33,10 +33,10 @@ def print_balance_header():
 
 
 # Use the Oracle REST API to get the account balance for the given tenancy
-def get_account_balance(report_time, tenant, username, password, domain, idcs_guid):
+def get_account_balance(report_time, tenant, username, password, cloud_acct, idcs_guid):
 
 	resp = requests.get(
-		'https://itra.oraclecloud.com/metering/api/v1/cloudbucks/' + domain,
+		'https://itra.oraclecloud.com/metering/api/v1/cloudbucks/' + cloud_acct,
 		auth=(username, password),
 		headers={'X-ID-TENANT-NAME': idcs_guid}
 	)
@@ -88,10 +88,10 @@ if __name__ == "__main__":
 
 		username = ini_data['username']
 		password = ini_data['password']
-		domain = ini_data['domain']
+		cloud_acct = ini_data['domain']
 		idcs_guid = ini_data['idcs_guid']
 
 		if debug:
-			print('User:Pass = {}:{}   Domain, IDCSID = {}:{}'.format(username, password, domain, idcs_guid))
+			print('User:Pass = {}:{}   Domain, IDCSID = {}:{}'.format(username, password, cloud_acct, idcs_guid))
 
-		get_account_balance(report_time, tenant, username, password, domain, idcs_guid)
+		get_account_balance(report_time, tenant, username, password, cloud_acct, idcs_guid)

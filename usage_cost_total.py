@@ -9,6 +9,8 @@
 #   domain_id (cacct-8b4b0c9b4c40173264564750985ff6b34
 #
 # 08-jan-2018   1.0     mbridge     Created
+# 25-jan-2018   1.1     mbridge     Handle overage charges in service costs
+
 #
 import requests
 import sys
@@ -18,7 +20,7 @@ import os
 
 
 # ======================================================================================================================
-debug: bool = False
+debug: bool = True
 configfile = '~/.oci/config.ini'
 # ======================================================================================================================
 
@@ -26,7 +28,7 @@ configfile = '~/.oci/config.ini'
 def get_account_charges(username, password, domain, idcs_guid, start_time, end_time):
 
 	if debug:
-		print('User:Pass      = {}/{}'.format(username, password))
+		print('User:Pass      = {}/{}'.format(username, "*" * len(password)))
 		print('Domain, IDCSID = {} {}'.format(domain, idcs_guid))
 		print('Start/End Time = {} to {}'.format(start_time, end_time))
 
@@ -34,7 +36,8 @@ def get_account_charges(username, password, domain, idcs_guid, start_time, end_t
 	url_params = {
 		'startTime': start_time.isoformat() + '.000',
 		'endTime': end_time.isoformat() + '.000',
-		'usageType': 'MONTHLY'
+		'usageType': 'TOTAL',
+		'computeTypeEnabled': 'Y'
 	}
 
 	resp = requests.get(
@@ -51,8 +54,33 @@ def get_account_charges(username, password, domain, idcs_guid, start_time, end_t
 
 	# Add the cost of all items returned
 	total_cost = 0
+	if debug:
+		print('{:24s} {:56s} {:>5s} {:>10s} {:>7s} {:3s} {:6s} {:10s}'.format(
+			'ServiceName',
+			'ResourceName',
+			'Qty',
+			'UnitPrc',
+			'Total',
+			'Cur',
+			'OvrFlg',
+			'Compute Type'))
+
 	for item in resp.json()['items']:
-		total_cost += item['costs'][0]['computedAmount']
+
+		# Each service could have multiple costs (e.g. in overage)
+		for cost in item['costs']:
+
+			if debug:
+				print('{:24s} {:56s} {:5.0f} {:10.5f} {:7.2f} {:3s} {:>6s} {:10s}'.format(
+					item['serviceName'],
+					item['resourceName'],
+					cost['computedQuantity'], cost['unitPrice'],
+					cost['computedAmount'], item['currency'],
+					cost['overagesFlag'],
+					cost['computeType']))
+
+			if cost['computeType'] == 'Usage':
+				total_cost += cost['computedAmount']
 
 	return total_cost
 
@@ -86,7 +114,7 @@ if __name__ == "__main__":
 		ini_data['username'], ini_data['password'],
 		ini_data['domain'], ini_data['idcs_guid'],
 		datetime.strptime(start_date, '%d-%m-%Y'),
-		datetime.strptime(end_date, '%d-%m-%Y') + timedelta(days=1, seconds=-1))
+		datetime.strptime(end_date, '%d-%m-%Y') + timedelta(days=1, seconds=-0.001))
 
 	# Simple output as I use it to feed a report
 	print('{:24s} {:6.2f}'.format(profile_name, usage))
