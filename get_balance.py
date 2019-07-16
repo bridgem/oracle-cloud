@@ -8,6 +8,18 @@
 #   Note:   This script assumes there is only one purchase to create the tenancy (multiple purchase entries
 #           may do strange things!)
 #
+# Parameters:
+#	 	profile_name
+#
+# Other parameters picked up from config file using profile name
+#   	username
+#   	password
+#   	idcs_id (idcs-4656dbcafeb47777d3efabcdef12345)
+#   	domain_id (cacct-8b4b0c9b4c40173264564750985ff6b34
+#
+# Output
+#		stdout, readable column format
+#
 # Output format
 # Time                             Tenant               Currency  Purchased    Balance      Running     Consumed
 # 17/12/2018 17:16:17              mytenant1            GBP         1800.00    1132.44      1132.44       667.56
@@ -21,6 +33,7 @@ import os
 import sys
 import datetime
 import configparser
+import json
 
 debug: bool = False
 configfile = '~/.oci/config.ini'
@@ -33,7 +46,7 @@ def print_balance_header():
 
 
 # Use the Oracle REST API to get the account balance for the given tenancy
-def get_account_balance(report_time, tenant, username, password, cloud_acct, idcs_guid):
+def get_account_balance(report_time, tenancy_name, username, password, cloud_acct, idcs_guid):
 
 	resp = requests.get(
 		'https://itra.oraclecloud.com/metering/api/v1/cloudbucks/' + cloud_acct,
@@ -42,25 +55,28 @@ def get_account_balance(report_time, tenant, username, password, cloud_acct, idc
 	)
 
 	if resp.status_code != 200:
-		# This means something went wrong.
-		print('Error in GET: {}'.format(resp.status_code), file=sys.stderr)
-		raise Exception
+		# This means something went wrong
+		msg = json.loads(resp.text)['errorMessage']
 
-	for item in resp.json()['items']:
+		print('Error in GET: {} ({}) on tenancy {}'.format(resp.status_code, resp.reason, tenancy_name), file=sys.stderr)
+		print('  {}'.format(msg), file=sys.stderr)
 
-		# Calculate amt consumed so far
-		consumed = item['purchase'][0]['purchasedResources'][0]['value'] - \
-			item['balance'][0]['purchasedResources'][0]['value']
+	else:
+		for item in resp.json()['items']:
 
-		print("{:24s}{:30s}{:10s}{:>11.2f}{:>11.2f}{:12.2f}".format(
-			report_time.strftime('%d/%m/%Y %H:%M:%S'),
-			tenant,
-			item['purchase'][0]['purchasedResources'][0]['unit'],
-			item['purchase'][0]['purchasedResources'][0]['value'],
-			item['balance'][0]['purchasedResources'][0]['value'],
-			consumed
-		)
-		)
+			# Calculate amt consumed so far
+			consumed = item['purchase'][0]['purchasedResources'][0]['value'] - \
+				item['balance'][0]['purchasedResources'][0]['value']
+
+			print("{:24s}{:30s}{:10s}{:>11.2f}{:>11.2f}{:12.2f}".format(
+				report_time.strftime('%d/%m/%Y %H:%M:%S'),
+				tenancy_name,
+				item['purchase'][0]['purchasedResources'][0]['unit'],
+				item['purchase'][0]['purchasedResources'][0]['value'],
+				item['balance'][0]['purchasedResources'][0]['value'],
+				consumed
+			)
+			)
 
 
 if __name__ == "__main__":
@@ -92,6 +108,7 @@ if __name__ == "__main__":
 		idcs_guid = ini_data['idcs_guid']
 
 		if debug:
-			print('User:Pass = {}:{}   Domain, IDCSID = {}:{}'.format(username, password, cloud_acct, idcs_guid))
+			print('User:Pass = {}:{}   Domain, IDCSID = {}:{}'.format(
+				username, "*" * len(password), cloud_acct, idcs_guid))
 
 		get_account_balance(report_time, tenant, username, password, cloud_acct, idcs_guid)
