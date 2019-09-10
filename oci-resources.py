@@ -9,6 +9,7 @@
 # 		csv file
 #
 # 16-nov-2018   Martin Bridge   Created
+# 06-sep-2019	Martin Bridge	Added detection of Non-BYOL database instances
 #
 import oci
 import sys
@@ -24,8 +25,8 @@ output_dir = "./log"
 ################################################################################################
 
 # Output formats for readable, columns style output and csv files
-field_names = ['Tenancy', 'Region', 'Type', 'Compartment', 'Name', 'State', 'DB', 'Shape', 'OCPU', 'StorageGB', 'Created']
-print_format = '{Tenancy:24s} {Region:9s} {Type:20s} {Compartment:54s} {Name:50.50s} {State:18s} {DB:4s} {Shape:16s} {OCPU:4s} {StorageGB:9s} {Created:32s}'
+field_names = ['Tenancy', 'Region', 'Compartment', 'Type', 'Name', 'State', 'DB', 'Shape', 'OCPU', 'StorageGB', 'BYOLstatus', 'Created']
+print_format = '{Tenancy:24s} {Region:9s} {Compartment:54s} {Type:20s} {Name:50.50s} {State:18s} {DB:4s} {Shape:16s} {OCPU:4s} {StorageGB:9s} {BYOLstatus:9s} {Created:32s}'
 header_format = re.sub('{[A-Z,a-z]*', '{', print_format)	# Header format removes the named placeholders
 
 
@@ -67,73 +68,82 @@ def list_tenancy_resources(compartment_list):
 			search_spec = oci.resource_search.models.StructuredSearchDetails()
 			# search_spec.query = 'query all resources'
 			# AutonomousDataSecurityInstance
-			search_spec.query = '''query AutonomousDatabase, BootVolume, 
-			BootVolumeBackup, Bucket, Database, DbSystem, Image, Instance, 
+			search_spec.query = '''query AutonomousDatabase, BootVolume,
+			BootVolumeBackup, Bucket, Database, DbSystem, Image, Instance,
 			Vcn, Volume, VolumeBackup resources'''
+
 			resources = resource_search_client.search_resources(search_details=search_spec).data
 
 			for resource in resources.items:
 
 				debug_out('ID: ' + resource.identifier + ', Type: ' + resource.resource_type)
 
-				if resource.lifecycle_state != 'XXTerminated' and resource.lifecycle_state != 'XXProvisioning':
+				db_workload = ''
+				shape = ''
+				cpu_core_count = ''
+				storage_gbs = ''
+				byol_flag = ''
 
-					db_workload = ''
-					shape = ''
-					cpu_core_count = ''
-					storage_gbs = ''
+				cid = resource.compartment_id
+				if cid is not None:
+					compartment_name = get_compartment_name(cid, compartment_list)
+				else:
+					compartment_name = '-'
 
-					cid = resource.compartment_id
-					if cid is not None:
-						compartment_name = get_compartment_name(cid, compartment_list)
+				if resource.resource_type == 'Instance':
+					resource_detail = compute_client.get_instance(resource.identifier).data
+					shape = resource_detail.shape
+					# Get OCPU from last field of shape VM.Standard2.4
+					cpu_core_count = shape.split('.')[-1]
+				elif resource.resource_type == 'AutonomousDatabase':
+					resource_detail = db_client.get_autonomous_database(resource.identifier).data
+					db_workload = resource_detail.db_workload
+					cpu_core_count = str(resource_detail.cpu_core_count)
+					storage_gbs = str(resource_detail.data_storage_size_in_tbs * 1024)
+					if resource_detail.license_model != "BRING_YOUR_OWN_LICENSE":
+						byol_flag = "*NON-BYOL*"
 					else:
-						compartment_name = '-'
-#TODO: Add Load Balancers, FileSystems
-					if resource.resource_type == 'Instance':
-						resource_detail = compute_client.get_instance(resource.identifier).data
-						shape = resource_detail.shape
-						# Get OCPU from last field of shape VM.Standard2.4
-						cpu_core_count = shape.split('.')[-1]
-					elif resource.resource_type == 'AutonomousDatabase':
-						resource_detail = db_client.get_autonomous_database(resource.identifier).data
-						db_workload = resource_detail.db_workload
-						cpu_core_count = str(resource_detail.cpu_core_count)
-						storage_gbs = str(resource_detail.data_storage_size_in_tbs * 1024)
-					elif resource.resource_type == 'DbSystem':
-						resource_detail = db_client.get_db_system(resource.identifier).data
-						shape = resource_detail.shape
-						storage_gbs = str(resource_detail.data_storage_size_in_gbs)
-					elif resource.resource_type == 'Volume':
-						resource_detail = block_storage_client.get_volume(resource.identifier).data
-						storage_gbs = str(resource_detail.size_in_gbs)
-					elif resource.resource_type == 'BootVolume':
-						resource_detail = block_storage_client.get_boot_volume(resource.identifier).data
-						storage_gbs = str(resource_detail.size_in_gbs)
-					elif resource.resource_type == 'BootVolumeBackup':
-						resource_detail = block_storage_client.get_boot_volume_backup(resource.identifier).data
-						storage_gbs = str(resource_detail.size_in_gbs)
-					elif resource.resource_type == 'Instance':
-						resource_detail = compute_client.get_instance(resource.identifier).data
-						shape = resource_detail.shape
+						byol_flag = "BYOL"
+				elif resource.resource_type == 'DbSystem':
+					resource_detail = db_client.get_db_system(resource.identifier).data
+					shape = resource_detail.shape
+					storage_gbs = str(resource_detail.data_storage_size_in_gbs)
+					# Get OCPU from last field of shape VM.Standard2.4
+					cpu_core_count = shape.split('.')[-1]
+					if resource_detail.license_model != "BRING_YOUR_OWN_LICENSE":
+						byol_flag = "*NON-BYOL*"
+					else:
+						byol_flag = "BYOL"
+				elif resource.resource_type == 'Volume':
+					resource_detail = block_storage_client.get_volume(resource.identifier).data
+					storage_gbs = str(resource_detail.size_in_gbs)
+				elif resource.resource_type == 'BootVolume':
+					resource_detail = block_storage_client.get_boot_volume(resource.identifier).data
+					storage_gbs = str(resource_detail.size_in_gbs)
+				elif resource.resource_type == 'BootVolumeBackup':
+					resource_detail = block_storage_client.get_boot_volume_backup(resource.identifier).data
+					storage_gbs = str(resource_detail.size_in_gbs)
+				#TODO: Add Load Balancers, FileSystems?
 
-					if resource.display_name == "OID-BV":
-						print("ODI STOP")
+				if resource.display_name == "OID-BV":
+					print("ODI STOP")
 
-					output_dict = {
-						'Tenancy': tenancy_name,
-						'Region': region_name,
-						'Type': resource.resource_type,
-						'Compartment': compartment_name,
-						'Name': resource.display_name,
-						'State': resource.lifecycle_state,
-						'DB': db_workload,
-						'Shape': shape,
-						'OCPU': cpu_core_count,
-						'StorageGB': storage_gbs,
-						'Created': resource.time_created.strftime("%Y-%m-%d %H:%M:%S")
-					}
+				output_dict = {
+					'Tenancy': tenancy_name,
+					'Region': region_name,
+					'Compartment': compartment_name,
+					'Type': resource.resource_type,
+					'Name': resource.display_name,
+					'State': resource.lifecycle_state,
+					'DB': db_workload,
+					'Shape': shape,
+					'OCPU': cpu_core_count,
+					'StorageGB': storage_gbs,
+					'BYOLstatus': byol_flag,
+					'Created': resource.time_created.strftime("%Y-%m-%d %H:%M:%S")
+				}
 
-					format_output(output_dict)
+				format_output(output_dict)
 
 		except Exception as error:
 			print('Error {:s} [{:s}: {:s}]'.format(error.code, resource.resource_type, resource.display_name)

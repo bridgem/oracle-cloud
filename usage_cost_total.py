@@ -9,8 +9,8 @@
 # Other parameters picked up from config file using profile name
 #   	username
 #   	password
-#   	idcs_id (idcs-4656dbcafeb47777d3efabcdef12345)
-#   	domain_id (cacct-8b4b0c9b4c40173264564750985ff6b34
+#   	idcs_id (idcs-4656dbcafeb47777d3efabcdef12...) from idcs url
+#   	domain_id (cacct-8b4b0c9b4c40173264564750985ff6... select users in services from myservices page)
 #
 # Output
 #		stdout, readable column format
@@ -27,7 +27,7 @@ import json
 
 # ======================================================================================================================
 debug: bool = False
-detail: bool = False        # Report detailed breakdown of costs per service
+detail: bool = True        # Report detailed breakdown of costs per service
 configfile = '~/.oci/config.ini'
 # ======================================================================================================================
 
@@ -143,3 +143,5 @@ if __name__ == "__main__":
 
 	tenancy_usage(tenancy_name, start_date, end_date)
 
+	if debug:
+		print('DONE')
