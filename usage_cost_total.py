@@ -17,6 +17,7 @@
 #
 # 08-jan-2018   1.0     mbridge     Created
 # 25-jan-2018   1.1     mbridge     Handle overage charges in service costs
+# 31-oct-2019	1.2		mbridge		Simplified output using f-strings (requires python 3.6)
 
 import requests
 import sys
@@ -35,9 +36,9 @@ configfile = '~/.oci/config.ini'
 def get_account_charges(tenancy_name, username, password, domain, idcs_guid, start_time, end_time):
 
 	if debug:
-		print('User:Pass      = {}/{}'.format(username, "*" * len(password)))
-		print('Domain, IDCSID = {} {}'.format(domain, idcs_guid))
-		print('Start/End Time = {} to {}'.format(start_time, end_time))
+		print(f'User:Pass      = {username}/{"*" * len(password)}')
+		print(f'Domain, IDCSID = {domain} {idcs_guid}')
+		print(f'Start/End Time = {start_time} to {end_time}')
 
 	# Oracle API needs the milliseconds explicitly
 	# UsageType can be TOTAL, HOURLY or DAILY.
@@ -45,7 +46,7 @@ def get_account_charges(tenancy_name, username, password, domain, idcs_guid, sta
 		'startTime': start_time.isoformat() + '.000',
 		'endTime': end_time.isoformat() + '.000',
 		'usageType': 'TOTAL',
-		'dcAggEnabled': 'Y',
+		'dcAggEnabled': 'N',
 		'computeTypeEnabled': 'Y'
 	}
 
@@ -59,46 +60,74 @@ def get_account_charges(tenancy_name, username, password, domain, idcs_guid, sta
 	if resp.status_code != 200:
 		# This means something went wrong.
 		msg = json.loads(resp.text)['errorMessage']
-		print('Error in GET: {} ({}) on tenancy {}'.format(resp.status_code, resp.reason, tenancy_name), file=sys.stderr)
-		print('  {}'.format(msg), file=sys.stderr)
+		print(f'Error in GET: {resp.status_code} ({resp.reason}) on tenancy {tenancy_name}', file=sys.stderr)
+		print(f'  {msg}', file=sys.stderr)
 		return -1
 	else:
 		# Add the cost of all items returned
 		total_cost = 0
 		if detail:
-
 			# Print Headings
-			print('{:24s} {:15s} {:24s} {:58s} {:6s} {:>5s} {:>10s} {:>7s} {:3s} {:6s} {:10s}'.format(
-				'Tenancy',
-				'Data Centre',
-				'ServiceName',
-				'ResourceName',
-				'SKU',
-				'Qty',
-				'UnitPrc',
-				'Total',
-				'Cur',
-				'OvrFlg',
-				'Compute Type'))
+			print(
+				f"{'Tenancy':24} "
+				# f"{'Data Centre':15} "
+				f"{'ServiceName':24} "
+				f"{'ResourceName':58} "
+				f"{'SKU':6} "
+				f"{'Qty':>7} "
+				f"{'UnitPrc':>10} "
+				f"{'Total':>7} "
+				f"{'Cur':3} "
+				f"{'OvrFlg':6} "
+				f"{'Compute Type':10}")
 
 		for item in resp.json()['items']:
-
 			# Each service could have multiple costs (e.g. in overage)
-			for cost in item['costs']:
-				if detail:
-					print('{:24s} {:15s} {:24s} {:58s} {:6s} {:5.0f} {:10.5f} {:7.2f} {:3s} {:>6s} {:10s}'.format(
-						tenancy_name,
-						item['dataCenterId'],
-						item['serviceName'],
-						item['resourceName'],
-						item['gsiProductId'],
-						cost['computedQuantity'], cost['unitPrice'],
-						cost['computedAmount'], item['currency'],
-						cost['overagesFlag'],
-						cost['computeType']))
+			# Because of an anomoly in billing, overage amounts use the wrong unitPrice
+			# so take the unit price from the non-overage entry
 
-				if cost['computeType'] == 'Usage':
-					total_cost += cost['computedAmount']
+			costs = item['costs']
+			unit_price = 0
+			std_unit_price = 0
+			for cost in costs:
+				# TESTING
+				# Find the pricing record for the non-overage amount
+				# This only works if there are records for overage and non-overage in the same data range!!
+				#
+				# This code is pretty ugly, but it's a quick (temporary!) test
+				#
+				if cost['overagesFlag'] == "N":
+					std_unit_price = cost['unitPrice']
+
+			for cost in costs:
+
+				if std_unit_price == 0:
+					# Std price not found
+					unit_price = cost['unitPrice']
+				else:
+					unit_price = std_unit_price
+
+				unit_cost = unit_price * cost['computedQuantity']
+				total_cost += unit_price * cost['computedQuantity']
+
+				if detail:
+					print(
+						f"{tenancy_name:24} "
+						# f"{item['dataCenterId']:15.15} "
+						f"{item['serviceName']:24} "
+						f"{item['resourceName']:58.58} "
+						f"{item['gsiProductId']:6} "
+						f"{cost['computedQuantity']:7.0f} "
+						f"{cost['unitPrice']:10.5f} "
+						f"{cost['computedAmount']:7.2f} "
+						f"{item['currency']:3} "
+						f"{cost['overagesFlag']:>6} "
+						f"{cost['computeType']:11}"
+						f"{cost['computedQuantity']:10.3f} @ {unit_price:8.5f} = {unit_cost:8.2f}"
+					)
+
+				# if cost['computeType'] == 'Usage':
+				# total_cost += cost['computedAmount']
 
 		return total_cost
 
@@ -109,7 +138,7 @@ def tenancy_usage(tenancy_name, start_date, end_date):
 	configfilepath = os.path.expanduser(configfile)
 
 	if not os.path.isfile(configfilepath):
-		print('Error: Config file not found ({})'.format(configfilepath), file=sys.stderr)
+		print(f'Error: Config file not found ({configfilepath})', file=sys.stderr)
 		sys.exit(0)
 
 	config = configparser.ConfigParser()
@@ -127,13 +156,13 @@ def tenancy_usage(tenancy_name, start_date, end_date):
 		datetime.strptime(end_date, '%d-%m-%Y') + timedelta(days=1, seconds=-0.001))
 
 	# Simple output as I use it to feed a report
-	print('{:24s} {:6.2f}'.format(tenancy_name, usage))
+	print(f'{tenancy_name:24} {usage:6.2f}')
 
 
 if __name__ == "__main__":
 	# Get profile from command line
 	if len(sys.argv) != 4:
-		print('Usage: ' + sys.argv[0] + ' <profile_name> <start_date> <end_date>')
+		print(f'Usage: {sys.argv[0]} <profile_name> <start_date> <end_date>')
 		print('       Where date format = dd-mm-yyyy')
 		sys.exit()
 	else:

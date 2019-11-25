@@ -17,6 +17,7 @@ import csv
 import time
 import re
 from string import Formatter
+
 vformat = Formatter().vformat
 
 ################################################################################################
@@ -25,9 +26,12 @@ output_dir = "./log"
 ################################################################################################
 
 # Output formats for readable, columns style output and csv files
-field_names = ['Tenancy', 'Region', 'Compartment', 'Type', 'Name', 'State', 'DB', 'Shape', 'OCPU', 'StorageGB', 'BYOLstatus', 'Created']
-print_format = '{Tenancy:24s} {Region:9s} {Compartment:54s} {Type:20s} {Name:50.50s} {State:18s} {DB:4s} {Shape:16s} {OCPU:4s} {StorageGB:9s} {BYOLstatus:9s} {Created:32s}'
-header_format = re.sub('{[A-Z,a-z]*', '{', print_format)	# Header format removes the named placeholders
+field_names = [
+	'Tenancy', 'Region', 'Compartment', 'Type', 'Name', 'State', 'DB',
+	'Shape', 'OCPU', 'StorageGB', 'BYOLstatus', 'Created']
+print_format = '{Tenancy:24s} {Region:9s} {Compartment:54s} {Type:20s} {Name:54.54s} {State:18s} {DB:4s} {Shape:20s} {OCPU:>4s} {StorageGB:>9s} {BYOLstatus:10s} {Created:32s}'
+# Header format removes the named placeholders
+header_format = re.sub('{[A-Z,a-z]*', '{', print_format)
 
 
 def debug_out(out_str):
@@ -36,9 +40,9 @@ def debug_out(out_str):
 
 
 # Get compartment full name (path) from the compartment list dictionary
-def get_compartment_name(id, compartment_list):
+def get_compartment_name(compartment_id, compartment_list):
 	for comp in compartment_list:
-		if comp['id'] == id:
+		if comp['id'] == compartment_id:
 			return comp['path']
 	return 'Not Found'
 
@@ -54,6 +58,7 @@ def list_tenancy_resources(compartment_list):
 
 	# Search all resources
 	for region in regions:
+
 		config['region'] = region.region_name
 		resource_search_client = oci.resource_search.ResourceSearchClient(config)
 		db_client = oci.database.DatabaseClient(config)
@@ -66,17 +71,18 @@ def list_tenancy_resources(compartment_list):
 		debug_out('Resource Search ' + region_name)
 		try:
 			search_spec = oci.resource_search.models.StructuredSearchDetails()
-			# search_spec.query = 'query all resources'
+			search_spec.query = 'query all resources'
+
 			# AutonomousDataSecurityInstance
-			search_spec.query = '''query AutonomousDatabase, BootVolume,
-			BootVolumeBackup, Bucket, Database, DbSystem, Image, Instance,
-			Vcn, Volume, VolumeBackup resources'''
+			# search_spec.query = '''query AutonomousDatabase, BootVolume,
+			# BootVolumeBackup, Bucket, Database, DbSystem, Image, Instance,
+			# Vcn, Volume, VolumeBackup resources'''
 
 			resources = resource_search_client.search_resources(search_details=search_spec).data
 
 			for resource in resources.items:
 
-				debug_out('ID: ' + resource.identifier + ', Type: ' + resource.resource_type)
+				debug_out(f'ID: {resource.identifier}, Type: {resource.resource_type}')
 
 				db_workload = ''
 				shape = ''
@@ -110,6 +116,9 @@ def list_tenancy_resources(compartment_list):
 					storage_gbs = str(resource_detail.data_storage_size_in_gbs)
 					# Get OCPU from last field of shape VM.Standard2.4
 					cpu_core_count = shape.split('.')[-1]
+					node_count = resource_detail.node_count
+					if node_count > 1:
+						shape = shape + '(x' + str(node_count) + ')'
 					if resource_detail.license_model != "BRING_YOUR_OWN_LICENSE":
 						byol_flag = "*NON-BYOL*"
 					else:
@@ -128,13 +137,19 @@ def list_tenancy_resources(compartment_list):
 				if resource.display_name == "OID-BV":
 					print("ODI STOP")
 
+				# Some items do not return a lifecycle state (eg. Tags)
+				if resource.lifecycle_state is not None:
+					state = resource.lifecycle_state
+				else:
+					state = '-'
+
 				output_dict = {
 					'Tenancy': tenancy_name,
 					'Region': region_name,
 					'Compartment': compartment_name,
 					'Type': resource.resource_type,
 					'Name': resource.display_name,
-					'State': resource.lifecycle_state,
+					'State': state,
 					'DB': db_workload,
 					'Shape': shape,
 					'OCPU': cpu_core_count,
@@ -146,14 +161,12 @@ def list_tenancy_resources(compartment_list):
 				format_output(output_dict)
 
 		except Exception as error:
-			print('Error {:s} [{:s}: {:s}]'.format(error.code, resource.resource_type, resource.display_name)
-			      , file=sys.stderr)
+			print(f'Error {error.code} [{resource.resource_type}: {resource.display_name}]', file=sys.stderr)
 	return
 
 
 # Traverse the returned object list to build the full compartment path
 def traverse(compartments, parent_id, parent_path, compartment_list):
-
 	next_level_compartments = [c for c in compartments if c.compartment_id == parent_id]
 
 	for compartment in next_level_compartments:
@@ -170,7 +183,6 @@ def traverse(compartments, parent_id, parent_path, compartment_list):
 
 
 def get_compartment_list(base_compartment_id):
-
 	# Get list of all compartments below given base
 	identity = oci.identity.IdentityClient(config)
 	compartments = oci.pagination.list_call_get_all_results(
@@ -183,7 +195,7 @@ def get_compartment_list(base_compartment_id):
 
 	compartment_list = [dict(id=base_compartment_id, name=base_compartment_name, path=base_path, state='Root')]
 	compartment_list = traverse(compartments, base_compartment_id, base_path, compartment_list)
-	compartment_list = sorted(compartment_list, key = lambda c: c['path'].lower())
+	compartment_list = sorted(compartment_list, key=lambda c: c['path'].lower())
 
 	return compartment_list
 
@@ -215,13 +227,13 @@ def list_tenancy_info(profile):
 		# Get Availability Domains
 		ADs[region.region_name] = identity.list_availability_domains(tenancy_id).data
 		# for ad in ADs[region.region_name]:
-		# 	print('   ' + ad.name)
+		# 	print(f'   {ad.name}')
 
-	# Get of users
-	users = identity.list_users(tenancy_id, limit=20).data
+	# Get list of users
+	users = identity.list_users(tenancy_id).data
 	print('OCI Users: ')
 	for u in users:
-		print('{:56.56s} {:32s}'.format(u.name, u.description))
+		print(f'{u.name:56} {u.description:32s}')
 	print('')
 
 	# Get compartment list (Tenancy ocid is equivalent to the root compartment ocid)
@@ -229,14 +241,14 @@ def list_tenancy_info(profile):
 
 	print('Compartments: ')
 	for cc in compartment_list:
-		print('{:30.30s} {:54s} {:8s} {:84s}'.format(cc['name'], cc['path'], cc['state'], cc['id']))
+		print(f"{cc['name']:30} {cc['path']:54} {cc['state']:8s} {cc['id']:84s}")
 	print('')
 
 	return compartment_list
 
 
 def csv_open(filename):
-	csv_path = output_dir + '/' + filename + '.csv'
+	csv_path = f'{output_dir}/{filename}.csv'
 
 	csv_file = open(csv_path, 'wt')
 
@@ -258,6 +270,8 @@ def csv_open(filename):
 def format_output(output_dict):
 	global csv_writer
 
+	str_debug = print_format
+
 	# Readable format to stdout
 	print(print_format.format(**output_dict))
 
@@ -271,12 +285,11 @@ config = {}
 regions = {}
 ADs = {}
 
-
 # Execute only if run as a script
 if __name__ == '__main__':
 	# Get profile name from command line
 	if len(sys.argv) != 2:
-		print('Usage: ' + sys.argv[0] + ' <profile_name>')
+		print(f'Usage: {sys.argv[0]} <profile_name>')
 		sys.exit()
 	else:
 		profile_name = sys.argv[1]
@@ -289,4 +302,4 @@ if __name__ == '__main__':
 	start = time.time()
 	# List all the resources in each compartment
 	list_tenancy_resources(compartment_list)
-	print("TIME TAKEN: {:8.2f}".format(time.time() - start))
+	print(f'TIME TAKEN: {(time.time() - start):6.2f}')
