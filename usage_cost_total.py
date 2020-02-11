@@ -17,7 +17,8 @@
 #
 # 08-jan-2018   1.0     mbridge     Created
 # 25-jan-2018   1.1     mbridge     Handle overage charges in service costs
-# 31-oct-2019	1.2		mbridge		Simplified output using f-strings (requires python 3.6)
+# 31-oct-2019   1.2	    mbridge	    Simplified output using f-strings (requires python 3.6)
+# 10-feb-2020   1.3	    mbridge     Allow choice of CSV or tablular output
 
 import requests
 import sys
@@ -25,15 +26,58 @@ from datetime import datetime, timedelta
 import configparser
 import os
 import json
+import re
+from string import Formatter
+import csv
 
 # ======================================================================================================================
 debug: bool = False
 detail: bool = True        # Report detailed breakdown of costs per service
+output_format = "CSV"	   # CSV or normal output, set to "CSV" or anything else
 configfile = '~/.oci/config.ini'
 # ======================================================================================================================
 
+# Dictionary keys and headings
+field_names = [
+	'Tenancy', 'ServiceName', 'ResourceName', 'SKU', 'Qty',
+	'UnitPrc', 'Total', 'Cur', 'OvrFlg', 'ComputeType',
+	'BillTotalCost', 'CalcUPrc', 'LineCost', 'CalcTotalCost']
+
+print_format = "{Tenancy:24} {ServiceName:24} {ResourceName:58.58} {SKU:6} {Qty:>10.3f} " \
+			   "{UnitPrc:>10.6f} {Total:>7.2f} {Cur:3} {OvrFlg:>6} {ComputeType:11.11} " \
+			   "{BillTotalCost:9.2f} {CalcUPrc:>10.6f} {LineCost:>8.2f} {CalcTotalCost:>9.2f}"
+# Header format removes the named placeholders
+header_format = re.sub('{[A-Z,a-z]*', '{', print_format)
+# Change number formats to string for heading output
+header_format = re.sub('\.[0-9]*f', 's', header_format)
+
+
+# Output a line for each cloud resource (output_dict should be a dictionary)
+def format_output(output_dict, format):
+	global csv_writer
+
+	if format == "CSV":
+	# CSV to file
+		csv_writer.writerow(output_dict)
+	else:
+		# Readable format to stdout
+		print(print_format.format(**output_dict))
+
+
+def csv_init():
+
+	csv_writer = csv.DictWriter(
+		sys.stdout,
+		fieldnames=field_names, delimiter=',',
+		dialect='excel',
+		quotechar='"', quoting=csv.QUOTE_MINIMAL)
+
+	csv_writer.writeheader()
+
+	return csv_writer
 
 def get_account_charges(tenancy_name, username, password, domain, idcs_guid, start_time, end_time):
+	global csv_writer
 
 	if debug:
 		print(f'User:Pass      = {username}/{"*" * len(password)}')
@@ -65,21 +109,15 @@ def get_account_charges(tenancy_name, username, password, domain, idcs_guid, sta
 		return -1
 	else:
 		# Add the cost of all items returned
-		total_cost = 0
+		bill_total_cost = 0		# Ignores 'Do Not Bill' costs
+		calc_total_cost = 0		# Uses all quantities, but uses 'Usage' costs where available
 		if detail:
 			# Print Headings
-			print(
-				f"{'Tenancy':24} "
-				# f"{'Data Centre':15} "
-				f"{'ServiceName':24} "
-				f"{'ResourceName':58} "
-				f"{'SKU':6} "
-				f"{'Qty':>7} "
-				f"{'UnitPrc':>10} "
-				f"{'Total':>7} "
-				f"{'Cur':3} "
-				f"{'OvrFlg':6} "
-				f"{'Compute Type':10}")
+			# Headings
+			vformat = Formatter().vformat
+			print(vformat(header_format, field_names, ''))
+
+		csv_writer = csv_init()
 
 		for item in resp.json()['items']:
 			# Each service could have multiple costs (e.g. in overage)
@@ -87,49 +125,51 @@ def get_account_charges(tenancy_name, username, password, domain, idcs_guid, sta
 			# so take the unit price from the non-overage entry
 
 			costs = item['costs']
-			unit_price = 0
+			calc_unit_price = 0
 			std_unit_price = 0
+
+			# TESTING
+			# Find the pricing record for the non-overage amount
+			# This only works if there are records for overage and non-overage in the same report range!!
+			# This code is pretty ugly, but it's a quick (temporary!) test
 			for cost in costs:
-				# TESTING
-				# Find the pricing record for the non-overage amount
-				# This only works if there are records for overage and non-overage in the same data range!!
-				#
-				# This code is pretty ugly, but it's a quick (temporary!) test
-				#
 				if cost['overagesFlag'] == "N":
 					std_unit_price = cost['unitPrice']
 
 			for cost in costs:
 
 				if std_unit_price == 0:
-					# Std price not found
-					unit_price = cost['unitPrice']
+					# Std price not found for non-overage, so just use the (probabl) overages one
+					calc_unit_price = cost['unitPrice']
 				else:
-					unit_price = std_unit_price
+					calc_unit_price = std_unit_price
 
-				unit_cost = unit_price * cost['computedQuantity']
-				total_cost += unit_price * cost['computedQuantity']
+				calc_line_item_cost = calc_unit_price * cost['computedQuantity']
+				calc_total_cost += calc_line_item_cost
+
+				if cost['computeType'] == 'Usage':
+					bill_total_cost += cost['computedAmount']
 
 				if detail:
-					print(
-						f"{tenancy_name:24} "
-						# f"{item['dataCenterId']:15.15} "
-						f"{item['serviceName']:24} "
-						f"{item['resourceName']:58.58} "
-						f"{item['gsiProductId']:6} "
-						f"{cost['computedQuantity']:7.0f} "
-						f"{cost['unitPrice']:10.5f} "
-						f"{cost['computedAmount']:7.2f} "
-						f"{item['currency']:3} "
-						f"{cost['overagesFlag']:>6} "
-						f"{cost['computeType']:11}"
-						f"{cost['computedQuantity']:10.3f} @ {unit_price:8.5f} = {unit_cost:8.2f}"
-					)
+					output_dict = {
+						'Tenancy': tenancy_name,
+						'ServiceName': item['serviceName'],
+						'ResourceName': item['resourceName'],
+						'SKU': item['gsiProductId'],
+						'Qty': cost['computedQuantity'],
+						'UnitPrc': cost['unitPrice'],
+						'Total': cost['computedAmount'],
+						'Cur': item['currency'],
+						'OvrFlg': cost['overagesFlag'],
+						'ComputeType': cost['computeType'],
+						'BillTotalCost': bill_total_cost,
+						'CalcUPrc': calc_unit_price,
+						'LineCost': calc_line_item_cost,
+						'CalcTotalCost': calc_total_cost}
 
-				# if cost['computeType'] == 'Usage':
-				# total_cost += cost['computedAmount']
+					format_output(output_dict, output_format)
 
-		return total_cost
+		return bill_total_cost, calc_total_cost
 
 
 def tenancy_usage(tenancy_name, start_date, end_date):
@@ -148,7 +188,7 @@ def tenancy_usage(tenancy_name, start_date, end_date):
 
 	# Show usage details
 	# Set time component of end date to 23:59:59.999 to match the behaviour of the Oracle my-services dashboard
-	usage = get_account_charges(
+	bill_total_cost, calc_total_cost = get_account_charges(
 		tenancy_name,
 		ini_data['username'], ini_data['password'],
 		ini_data['domain'], ini_data['idcs_guid'],
@@ -156,7 +196,7 @@ def tenancy_usage(tenancy_name, start_date, end_date):
 		datetime.strptime(end_date, '%d-%m-%Y') + timedelta(days=1, seconds=-0.001))
 
 	# Simple output as I use it to feed a report
-	print(f'{tenancy_name:24} {usage:6.2f}')
+	print(f'{tenancy_name:24} {bill_total_cost:10.2f} {calc_total_cost:10.2f}')
 
 
 if __name__ == "__main__":
