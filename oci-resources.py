@@ -10,6 +10,7 @@
 #
 # 16-nov-2018   Martin Bridge   Created
 # 06-sep-2019	Martin Bridge	Added detection of Non-BYOL database instances
+# 09-jan-2020	Martin Bridge	Use Node status to indicate real availability of database
 #
 import oci
 import sys
@@ -17,8 +18,6 @@ import csv
 import time
 import re
 from string import Formatter
-
-vformat = Formatter().vformat
 
 ################################################################################################
 debug = False
@@ -29,7 +28,8 @@ output_dir = "./log"
 field_names = [
 	'Tenancy', 'Region', 'Compartment', 'Type', 'Name', 'State', 'DB',
 	'Shape', 'OCPU', 'StorageGB', 'BYOLstatus', 'Created']
-print_format = '{Tenancy:24s} {Region:9s} {Compartment:54s} {Type:20s} {Name:54.54s} {State:18s} {DB:4s} {Shape:20s} {OCPU:>4s} {StorageGB:>9s} {BYOLstatus:10s} {Created:32s}'
+print_format = '{Tenancy:24s} {Region:9s} {Compartment:54s} {Type:20s} {Name:54.54s} {State:18s} {DB:4s} ' \
+			   '{Shape:20s} {OCPU:>4s} {StorageGB:>9s} {BYOLstatus:10s} {Created:32s}'
 # Header format removes the named placeholders
 header_format = re.sub('{[A-Z,a-z]*', '{', print_format)
 
@@ -54,6 +54,7 @@ def list_tenancy_resources(compartment_list):
 	global csv_writer
 
 	# Headings
+	vformat = Formatter().vformat
 	print(vformat(header_format, field_names, ''))
 
 	# Search all resources
@@ -71,12 +72,11 @@ def list_tenancy_resources(compartment_list):
 		debug_out('Resource Search ' + region_name)
 		try:
 			search_spec = oci.resource_search.models.StructuredSearchDetails()
-			search_spec.query = 'query all resources'
+			# search_spec.query = 'query all resources'
 
-			# AutonomousDataSecurityInstance
-			# search_spec.query = '''query AutonomousDatabase, BootVolume,
-			# BootVolumeBackup, Bucket, Database, DbSystem, Image, Instance,
-			# Vcn, Volume, VolumeBackup resources'''
+			search_spec.query = '''query AutonomousDatabase, BootVolume,
+			BootVolumeBackup, Bucket, Database, DbSystem, Image, Instance,
+			Vcn, Volume, VolumeBackup resources'''
 
 			resources = resource_search_client.search_resources(search_details=search_spec).data
 
@@ -117,8 +117,18 @@ def list_tenancy_resources(compartment_list):
 					# Get OCPU from last field of shape VM.Standard2.4
 					cpu_core_count = shape.split('.')[-1]
 					node_count = resource_detail.node_count
-					if node_count > 1:
+
+					# Get status of DB Node instead of the dbsystem
+					# This more accurately reflects the status of the DB Server
+					node_list = db_client.list_db_nodes(cid, db_system_id=resource.identifier)
+					dbstate = 'Node:STOPPED'
+					for node in node_list.data:
+						if node.lifecycle_state == 'AVAILABLE':
+							dbstate = 'Node:AVAILABLE'
+
+					if node_count is not None and node_count > 1:
 						shape = shape + '(x' + str(node_count) + ')'
+
 					if resource_detail.license_model != "BRING_YOUR_OWN_LICENSE":
 						byol_flag = "*NON-BYOL*"
 					else:
@@ -138,10 +148,14 @@ def list_tenancy_resources(compartment_list):
 					print("ODI STOP")
 
 				# Some items do not return a lifecycle state (eg. Tags)
-				if resource.lifecycle_state is not None:
-					state = resource.lifecycle_state
+				# DBsystem state defined by Nodes (above)
+				if resource.resource_type == 'DbSystem':
+					state = dbstate
 				else:
-					state = '-'
+					if resource.lifecycle_state is not None:
+						state = resource.lifecycle_state
+					else:
+						state = '-'
 
 				output_dict = {
 					'Tenancy': tenancy_name,
@@ -269,8 +283,6 @@ def csv_open(filename):
 # Output a line for each cloud resource (output_dict should be a dictionary)
 def format_output(output_dict):
 	global csv_writer
-
-	str_debug = print_format
 
 	# Readable format to stdout
 	print(print_format.format(**output_dict))
