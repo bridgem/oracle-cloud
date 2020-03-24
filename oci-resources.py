@@ -27,9 +27,9 @@ output_dir = "./log"
 # Output formats for readable, columns style output and csv files
 field_names = [
 	'Tenancy', 'Region', 'Compartment', 'Type', 'Name', 'State', 'DB',
-	'Shape', 'OCPU', 'StorageGB', 'BYOLstatus', 'Created', "VolumeAttachment"]
+	'Shape', 'OCPU', 'StorageGB', 'BYOLstatus', 'VolAttached', 'Created' ]
 print_format = '{Tenancy:24s} {Region:9s} {Compartment:54s} {Type:20s} {Name:54.54s} {State:18s} {DB:4s} ' \
-			   '{Shape:20s} {OCPU:>4s} {StorageGB:>9s} {BYOLstatus:10s} {Created:32s} {VolumeAttachment:32s}'
+		'{Shape:20s} {OCPU:>4s} {StorageGB:>9s} {BYOLstatus:10s} {VolAttached:32s} {Created:32s} '
 # Header format removes the named placeholders
 header_format = re.sub('{[A-Z,a-z]*', '{', print_format)
 
@@ -111,7 +111,7 @@ def list_tenancy_resources(compartment_list):
 				cpu_core_count = ''
 				storage_gbs = ''
 				byol_flag = ''
-				volume_attachment_falg = ' '
+				volume_attachment_flag = ' '
 
 				cid = resource.compartment_id
 				if cid is not None:
@@ -161,9 +161,9 @@ def list_tenancy_resources(compartment_list):
 					storage_gbs = str(resource_detail.size_in_gbs)
 
 					if resource.identifier not in attached_volumes:
-						volume_attachment_falg = "Not attached"
+						volume_attachment_flag = "Not Attached"
 					else:
-						volume_attachment_falg = "Attatched"
+						volume_attachment_flag = "Attached"
 				elif resource.resource_type == 'BootVolume':
 					resource_detail = block_storage_client.get_boot_volume(resource.identifier).data
 					storage_gbs = str(resource_detail.size_in_gbs)
@@ -196,8 +196,8 @@ def list_tenancy_resources(compartment_list):
 					'OCPU': cpu_core_count,
 					'StorageGB': storage_gbs,
 					'BYOLstatus': byol_flag,
-					'Created': resource.time_created.strftime("%Y-%m-%d %H:%M:%S"),
-					"VolumeAttachment": volume_attachment_falg
+					'VolAttached': volume_attachment_flag,
+					'Created': resource.time_created.strftime("%Y-%m-%d %H:%M:%S")
 				}
 
 				format_output(output_dict)
