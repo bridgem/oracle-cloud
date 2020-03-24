@@ -27,9 +27,9 @@ output_dir = "./log"
 # Output formats for readable, columns style output and csv files
 field_names = [
 	'Tenancy', 'Region', 'Compartment', 'Type', 'Name', 'State', 'DB',
-	'Shape', 'OCPU', 'StorageGB', 'BYOLstatus', 'Created']
+	'Shape', 'OCPU', 'StorageGB', 'BYOLstatus', 'Created', "VolumeAttachment"]
 print_format = '{Tenancy:24s} {Region:9s} {Compartment:54s} {Type:20s} {Name:54.54s} {State:18s} {DB:4s} ' \
-			   '{Shape:20s} {OCPU:>4s} {StorageGB:>9s} {BYOLstatus:10s} {Created:32s}'
+			   '{Shape:20s} {OCPU:>4s} {StorageGB:>9s} {BYOLstatus:10s} {Created:32s} {VolumeAttachment:32s}'
 # Header format removes the named placeholders
 header_format = re.sub('{[A-Z,a-z]*', '{', print_format)
 
@@ -65,12 +65,34 @@ def list_tenancy_resources(compartment_list):
 		db_client = oci.database.DatabaseClient(config)
 		compute_client = oci.core.ComputeClient(config)
 		block_storage_client = oci.core.BlockstorageClient(config)
+		attached_volumes = []
 
 		# Parse region frmo uk-london-1 to london
 		region_name = region.region_name.split('-')[1]
 
 		debug_out('Resource Search ' + region_name)
 		try:
+
+			instance_search_spec = oci.resource_search.models.StructuredSearchDetails()
+			instance_search_spec.query = '''query Instance resources'''
+			instances = resource_search_client.search_resources(search_details=instance_search_spec).data
+
+			for instance in instances.items:
+				compartment_id = instance.compartment_id
+				instance_id = instance.identifier
+
+				# Find all volumes attached to instances
+				volume_attachments = oci.pagination.list_call_get_all_results(
+					compute_client.list_volume_attachments,
+					compartment_id=compartment_id,
+					instance_id=instance_id
+				).data
+
+				# Make sure there is volume available before adding it to the list
+				if len(volume_attachments) != 0:
+					for attached_volume in volume_attachments:
+						attached_volumes.append(attached_volume.volume_id)
+
 			search_spec = oci.resource_search.models.StructuredSearchDetails()
 			# search_spec.query = 'query all resources'
 
@@ -89,6 +111,7 @@ def list_tenancy_resources(compartment_list):
 				cpu_core_count = ''
 				storage_gbs = ''
 				byol_flag = ''
+				volume_attachment_falg = ' '
 
 				cid = resource.compartment_id
 				if cid is not None:
@@ -136,13 +159,17 @@ def list_tenancy_resources(compartment_list):
 				elif resource.resource_type == 'Volume':
 					resource_detail = block_storage_client.get_volume(resource.identifier).data
 					storage_gbs = str(resource_detail.size_in_gbs)
+
+					if resource.identifier not in attached_volumes:
+						volume_attachment_falg = "Not attached"
+					else:
+						volume_attachment_falg = "Attatched"
 				elif resource.resource_type == 'BootVolume':
 					resource_detail = block_storage_client.get_boot_volume(resource.identifier).data
 					storage_gbs = str(resource_detail.size_in_gbs)
 				elif resource.resource_type == 'BootVolumeBackup':
 					resource_detail = block_storage_client.get_boot_volume_backup(resource.identifier).data
 					storage_gbs = str(resource_detail.size_in_gbs)
-				#TODO: Add Load Balancers, FileSystems?
 
 				if resource.display_name == "OID-BV":
 					print("ODI STOP")
@@ -169,7 +196,8 @@ def list_tenancy_resources(compartment_list):
 					'OCPU': cpu_core_count,
 					'StorageGB': storage_gbs,
 					'BYOLstatus': byol_flag,
-					'Created': resource.time_created.strftime("%Y-%m-%d %H:%M:%S")
+					'Created': resource.time_created.strftime("%Y-%m-%d %H:%M:%S"),
+					"VolumeAttachment": volume_attachment_falg
 				}
 
 				format_output(output_dict)
