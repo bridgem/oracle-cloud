@@ -17,7 +17,8 @@ import requests
 # https://itra.oraclecloud.com/itas/.anon/myservices/api/v1/products?partNumber=B88514
 
 url = "https://itra.oraclecloud.com/itas/.anon/myservices/api/v1/products?limit=500"
-resp = requests.get(url, headers={'X-Oracle-Accept-CurrencyCode': 'GBP'})
+http_header = {'X-Oracle-Accept-CurrencyCode': 'GBP'}
+resp = requests.get(url, headers=http_header)
 
 # Columns headings
 print("PartNum|Category|Name|Metric|PAYG_price|Month_price}")
