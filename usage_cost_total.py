@@ -72,7 +72,8 @@ def csv_init():
 		dialect='excel',
 		quotechar='"', quoting=csv.QUOTE_MINIMAL)
 
-	csv_writer.writeheader()
+	if detail:
+		csv_writer.writeheader()
 
 	return csv_writer
 
@@ -89,7 +90,7 @@ def get_account_charges(tenancy_name, username, password, domain, idcs_guid, sta
 	url_params = {
 		'startTime': start_time.isoformat() + '.000',
 		'endTime': end_time.isoformat() + '.000',
-		'usageType': 'TOTAL',
+		'usageType': 'MONTHLY',
 		'dcAggEnabled': 'N',
 		'computeTypeEnabled': 'Y'
 	}
@@ -114,10 +115,13 @@ def get_account_charges(tenancy_name, username, password, domain, idcs_guid, sta
 		if detail:
 			# Print Headings
 			# Headings
-			vformat = Formatter().vformat
-			print(vformat(header_format, field_names, ''))
+			if output_format == "CSV":
+				csv_writer = csv_init()
+			else:
+				vformat = Formatter().vformat
+				print(vformat(header_format, field_names, ''))
 
-		csv_writer = csv_init()
+		items = resp.json()
 
 		for item in resp.json()['items']:
 			# Each service could have multiple costs (e.g. in overage)
