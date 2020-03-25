@@ -27,9 +27,10 @@ output_dir = "./log"
 # Output formats for readable, columns style output and csv files
 field_names = [
 	'Tenancy', 'Region', 'Compartment', 'Type', 'Name', 'State', 'DB',
-	'Shape', 'OCPU', 'StorageGB', 'BYOLstatus', 'Created']
+	'Shape', 'OCPU', 'StorageGB', 'BYOLstatus', 'VolAttached', 'Created' ]
 print_format = '{Tenancy:24s} {Region:9s} {Compartment:54s} {Type:20s} {Name:54.54s} {State:18s} {DB:4s} ' \
-			   '{Shape:20s} {OCPU:>4} {StorageGB:>9s} {BYOLstatus:10s} {Created:32s}'
+		'{Shape:20s} {OCPU:>4s} {StorageGB:>9s} {BYOLstatus:10s} {VolAttached:32s} {Created:32s} '
+
 # Header format removes the named placeholders
 header_format = re.sub('{[A-Z,a-z]*', '{', print_format)
 
@@ -65,12 +66,34 @@ def list_tenancy_resources(compartment_list):
 		db_client = oci.database.DatabaseClient(config)
 		compute_client = oci.core.ComputeClient(config)
 		block_storage_client = oci.core.BlockstorageClient(config)
+		attached_volumes = []
 
 		# Parse region from uk-london-1 to london
 		region_name = region.region_name.split('-')[1]
 
 		debug_out('Resource Search ' + region_name)
 		try:
+
+			instance_search_spec = oci.resource_search.models.StructuredSearchDetails()
+			instance_search_spec.query = '''query Instance resources'''
+			instances = resource_search_client.search_resources(search_details=instance_search_spec).data
+
+			for instance in instances.items:
+				compartment_id = instance.compartment_id
+				instance_id = instance.identifier
+
+				# Find all volumes attached to instances
+				volume_attachments = oci.pagination.list_call_get_all_results(
+					compute_client.list_volume_attachments,
+					compartment_id=compartment_id,
+					instance_id=instance_id
+				).data
+
+				# Make sure there is volume available before adding it to the list
+				if len(volume_attachments) != 0:
+					for attached_volume in volume_attachments:
+						attached_volumes.append(attached_volume.volume_id)
+
 			search_spec = oci.resource_search.models.StructuredSearchDetails()
 			# search_spec.query = 'query all resources'
 
@@ -84,95 +107,103 @@ def list_tenancy_resources(compartment_list):
 				# Ignore terminated resources
 				if resource.lifecycle_state != 'TERMINATED' and resource.lifecycle_state != 'Deleted':
 
-					debug_out(f'ID: {resource.identifier}, Type: {resource.resource_type}')
+				debug_out(f'ID: {resource.identifier}, Type: {resource.resource_type}')
 
-					db_workload = ''
-					shape = ''
-					cpu_core_count = ''
-					storage_gbs = ''
-					byol_flag = ''
+				db_workload = ''
+				shape = ''
+				cpu_core_count = ''
+				storage_gbs = ''
+				byol_flag = ''
+				volume_attachment_flag = ' '
 
-					cid = resource.compartment_id
-					if cid is not None:
-						compartment_name = get_compartment_name(cid, compartment_list)
+				cid = resource.compartment_id
+				if cid is not None:
+					compartment_name = get_compartment_name(cid, compartment_list)
+				else:
+					compartment_name = '-'
+
+				if resource.resource_type == 'Instance':
+					resource_detail = compute_client.get_instance(resource.identifier).data
+					shape = resource_detail.shape
+					# Get OCPU from last field of shape VM.Standard2.4
+					cpu_core_count = shape.split('.')[-1]
+				elif resource.resource_type == 'AutonomousDatabase':
+					resource_detail = db_client.get_autonomous_database(resource.identifier).data
+					db_workload = resource_detail.db_workload
+					cpu_core_count = str(resource_detail.cpu_core_count)
+					storage_gbs = str(resource_detail.data_storage_size_in_tbs * 1024)
+					if resource_detail.license_model != "BRING_YOUR_OWN_LICENSE":
+						byol_flag = "*NON-BYOL*"
 					else:
-						compartment_name = '-'
+						byol_flag = "BYOL"
+				elif resource.resource_type == 'DbSystem':
+					resource_detail = db_client.get_db_system(resource.identifier).data
+					shape = resource_detail.shape
+					storage_gbs = str(resource_detail.data_storage_size_in_gbs)
+					# Get OCPU from last field of shape VM.Standard2.4
+					cpu_core_count = shape.split('.')[-1]
+					node_count = resource_detail.node_count
 
-					if resource.resource_type == 'Instance':
-						resource_detail = compute_client.get_instance(resource.identifier).data
-						shape = resource_detail.shape
-						# Get OCPU from last field of shape VM.Standard2.4
-						cpu_core_count = shape.split('.')[-1]
-					elif resource.resource_type == 'AutonomousDatabase':
-						resource_detail = db_client.get_autonomous_database(resource.identifier).data
-						db_workload = resource_detail.db_workload
-						cpu_core_count = str(resource_detail.cpu_core_count)
-						storage_gbs = str(resource_detail.data_storage_size_in_tbs * 1024)
-						if resource_detail.license_model != "BRING_YOUR_OWN_LICENSE":
-							byol_flag = "*NON-BYOL*"
-						else:
-							byol_flag = "BYOL"
-					elif resource.resource_type == 'DbSystem':
-						resource_detail = db_client.get_db_system(resource.identifier).data
-						shape = resource_detail.shape
-						storage_gbs = str(resource_detail.data_storage_size_in_gbs)
-						# Get OCPU from last field of shape VM.Standard2.4
-						node_count = resource_detail.node_count
-						cpu_core_count = int(shape.split('.')[-1])
-						cpu_core_count = int(cpu_core_count) * node_count
+					# Get status of DB Node instead of the dbsystem
+					# This more accurately reflects the status of the DB Server
+					node_list = db_client.list_db_nodes(cid, db_system_id=resource.identifier)
+					dbstate = 'Node:STOPPED'
+					for node in node_list.data:
+						if node.lifecycle_state == 'AVAILABLE':
+							dbstate = 'Node:AVAILABLE'
 
-						# Get status of DB Node instead of the dbsystem
-						# This more accurately reflects the status of the DB Server
-						node_list = db_client.list_db_nodes(cid, db_system_id=resource.identifier)
-						dbstate = 'STOPPED (NODE)'
-						for node in node_list.data:
-							if node.lifecycle_state == 'AVAILABLE':
-								dbstate = 'AVAILABLE(NODE)'
+					if node_count is not None and node_count > 1:
+						shape = shape + '(x' + str(node_count) + ')'
 
-						if node_count is not None and node_count > 1:
-							shape = shape + '(x' + str(node_count) + ')'
-
-						if resource_detail.license_model != "BRING_YOUR_OWN_LICENSE":
-							byol_flag = "*NON-BYOL*"
-						else:
-							byol_flag = "BYOL"
-					elif resource.resource_type == 'Volume':
-						resource_detail = block_storage_client.get_volume(resource.identifier).data
-						storage_gbs = str(resource_detail.size_in_gbs)
-					elif resource.resource_type == 'BootVolume':
-						resource_detail = block_storage_client.get_boot_volume(resource.identifier).data
-						storage_gbs = str(resource_detail.size_in_gbs)
-					elif resource.resource_type == 'BootVolumeBackup':
-						resource_detail = block_storage_client.get_boot_volume_backup(resource.identifier).data
-						storage_gbs = str(resource_detail.size_in_gbs)
-					#TODO: Add Load Balancers, FileSystems?
-
-					# Some items do not return a lifecycle state (eg. Tags)
-					# DBsystem state defined by Nodes (above)
-					if resource.resource_type == 'DbSystem':
-						state = dbstate
+					if resource_detail.license_model != "BRING_YOUR_OWN_LICENSE":
+						byol_flag = "*NON-BYOL*"
 					else:
-						if resource.lifecycle_state is not None:
-							state = resource.lifecycle_state
-						else:
-							state = '-'
+						byol_flag = "BYOL"
+				elif resource.resource_type == 'Volume':
+					resource_detail = block_storage_client.get_volume(resource.identifier).data
+					storage_gbs = str(resource_detail.size_in_gbs)
 
-					output_dict = {
-						'Tenancy': tenancy_name,
-						'Region': region_name,
-						'Compartment': compartment_name,
-						'Type': resource.resource_type,
-						'Name': resource.display_name,
-						'State': state,
-						'DB': db_workload,
-						'Shape': shape,
-						'OCPU': cpu_core_count,
-						'StorageGB': storage_gbs,
-						'BYOLstatus': byol_flag,
-						'Created': resource.time_created.strftime("%Y-%m-%d %H:%M:%S")
-					}
+					if resource.identifier not in attached_volumes:
+						volume_attachment_flag = "Not Attached"
+					else:
+						volume_attachment_flag = "Attached"
+				elif resource.resource_type == 'BootVolume':
+					resource_detail = block_storage_client.get_boot_volume(resource.identifier).data
+					storage_gbs = str(resource_detail.size_in_gbs)
+				elif resource.resource_type == 'BootVolumeBackup':
+					resource_detail = block_storage_client.get_boot_volume_backup(resource.identifier).data
+					storage_gbs = str(resource_detail.size_in_gbs)
 
-					format_output(output_dict)
+				if resource.display_name == "OID-BV":
+					print("ODI STOP")
+
+				# Some items do not return a lifecycle state (eg. Tags)
+				# DBsystem state defined by Nodes (above)
+				if resource.resource_type == 'DbSystem':
+					state = dbstate
+				else:
+					if resource.lifecycle_state is not None:
+						state = resource.lifecycle_state
+					else:
+						state = '-'
+
+				output_dict = {
+					'Tenancy': tenancy_name,
+					'Region': region_name,
+					'Compartment': compartment_name,
+					'Type': resource.resource_type,
+					'Name': resource.display_name,
+					'State': state,
+					'DB': db_workload,
+					'Shape': shape,
+					'OCPU': cpu_core_count,
+					'StorageGB': storage_gbs,
+					'BYOLstatus': byol_flag,
+					'VolAttached': volume_attachment_flag,
+					'Created': resource.time_created.strftime("%Y-%m-%d %H:%M:%S")
+				}
+
+				format_output(output_dict)
 
 		except Exception as error:
 			print(f'Error {error.code} [{resource.resource_type}: {resource.display_name}]', file=sys.stderr)
