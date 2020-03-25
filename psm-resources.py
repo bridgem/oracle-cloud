@@ -22,7 +22,6 @@ import json
 
 # ======================================================================================================================
 debug: bool = False
-detail: bool = True        # Report detailed breakdown of costs per service
 configfile = '~/.oci/config.ini'
 # ======================================================================================================================
 
@@ -40,14 +39,13 @@ def list_psm_services(tenancy_name, username, password, idcs_guid):
 		f"{'Service Name':20.20} "
 		f"{'Creator':28.28} "
 		f"{'State':10} "
-		# f"{'Region':15} "
+		f"{'Region':15} "
 		f"{'CreationDate':32} ")
 
-	# for service_type in ["adbc", "andc", "apicsauto", "autoanalytics", "autoanalyticsinst", "autoblockchain", "bcsmgr",
-	# 					 "bdcsce", "botsaasauto", "cecsauto", "dbcs", "devserviceappauto", "dipcauto", "dipcinst",
-	# 					 "integrationcauto", "jcs", "oabcsinst", "oehcs", "oehpcs", "oicinst", "omcexternal",
-	# 					 "searchcloudapp", "soa", "ssi", "vbinst", "visualbuilderauto", "wtss"]:
-	for service_type in ["autoanalyticsinst"]:
+	for service_type in ["adbc", "andc", "apicsauto", "autoanalytics", "autoanalyticsinst", "autoblockchain", "bcsmgr",
+						 "bdcsce", "botsaasauto", "cecsauto", "dbcs", "devserviceappauto", "dipcauto", "dipcinst",
+						 "integrationcauto", "jcs", "oabcsinst", "oehcs", "oehpcs", "oicinst", "omcexternal",
+						 "searchcloudapp", "soa", "ssi", "vbinst", "visualbuilderauto", "wtss"]:
 		resp = requests.get(
 			"https://psm.europe.oraclecloud.com/paas/api/v1.1/instancemgmt/"
 			+ idcs_guid + "/services/" + service_type + "/instances",
@@ -68,12 +66,14 @@ def list_psm_services(tenancy_name, username, password, idcs_guid):
 				svc = services[1]
 				print(
 					f"{tenancy_name:22} "
-					f"{service_type:18} "
+					f"{svc['serviceType']:18} "
 					f"{svc['serviceName']:20.20} "
 					f"{svc['creator']:28.28} "
 					f"{svc['state']:10} "
-					# f"{svc['region']:15} "
+					f"{svc['region']:15} "
 					f"{svc['creationDate']:32} ")
+
+				# TODO: Handle isBYOL flag
 	return
 
 

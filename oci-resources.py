@@ -30,6 +30,7 @@ field_names = [
 	'Shape', 'OCPU', 'StorageGB', 'BYOLstatus', 'VolAttached', 'Created' ]
 print_format = '{Tenancy:24s} {Region:9s} {Compartment:54s} {Type:20s} {Name:54.54s} {State:18s} {DB:4s} ' \
 		'{Shape:20s} {OCPU:>4s} {StorageGB:>9s} {BYOLstatus:10s} {VolAttached:32s} {Created:32s} '
+
 # Header format removes the named placeholders
 header_format = re.sub('{[A-Z,a-z]*', '{', print_format)
 
@@ -67,7 +68,7 @@ def list_tenancy_resources(compartment_list):
 		block_storage_client = oci.core.BlockstorageClient(config)
 		attached_volumes = []
 
-		# Parse region frmo uk-london-1 to london
+		# Parse region from uk-london-1 to london
 		region_name = region.region_name.split('-')[1]
 
 		debug_out('Resource Search ' + region_name)
@@ -98,11 +99,13 @@ def list_tenancy_resources(compartment_list):
 
 			search_spec.query = '''query AutonomousDatabase, BootVolume,
 			BootVolumeBackup, Bucket, Database, DbSystem, Image, Instance,
-			Vcn, Volume, VolumeBackup resources'''
+			Volume, VolumeBackup resources
+			sorted by compartmentid asc'''
 
 			resources = resource_search_client.search_resources(search_details=search_spec).data
-
 			for resource in resources.items:
+				# Ignore terminated resources
+				if resource.lifecycle_state != 'TERMINATED' and resource.lifecycle_state != 'Deleted':
 
 				debug_out(f'ID: {resource.identifier}, Type: {resource.resource_type}')
 
@@ -267,7 +270,7 @@ def list_tenancy_info(profile):
 		identity.base_client.set_region(region.region_name)
 
 		# Get Availability Domains
-		ADs[region.region_name] = identity.list_availability_domains(tenancy_id).data
+		# ADs[region.region_name] = identity.list_availability_domains(tenancy_id).data
 		# for ad in ADs[region.region_name]:
 		# 	print(f'   {ad.name}')
 
