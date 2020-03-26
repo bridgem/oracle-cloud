@@ -29,10 +29,9 @@ output_dir = "./log"
 # Output formats for readable, columns style output and csv files
 field_names = [
 	'Tenancy', 'Region', 'Compartment', 'Type', 'Name', 'State', 'DB',
-	'Shape', 'OCPU', 'StorageGB', 'BYOLstatus', 'VolAttached', 'BootVolAttached', 'Created' ]
+	'Shape', 'OCPU', 'StorageGB', 'BYOLstatus', 'VolAttached', 'Created' ]
 print_format = 	'{Tenancy:24s} {Region:9s} {Compartment:54s} {Type:20s} {Name:54.54s} {State:18s} {DB:4s} ' \
-				'{Shape:20s} {OCPU:>4s} {StorageGB:>9s} {BYOLstatus:10s} {VolAttached:12s}'\
-				'{BootVolAttached:12s} {Created:32s} '
+				'{Shape:20s} {OCPU:>4s} {StorageGB:>9s} {BYOLstatus:10s} {VolAttached:12s} {Created:32s} '
 
 # Header format removes the named placeholders
 header_format = re.sub('{[A-Z,a-z]*', '{', print_format)
@@ -70,7 +69,6 @@ def list_tenancy_resources(compartment_list):
 		compute_client = oci.core.ComputeClient(config)
 		block_storage_client = oci.core.BlockstorageClient(config)
 		attached_volumes = []
-		attached_boot_volumes = []
 
 		# Parse region from uk-london-1 to london
 		region_name = region.region_name.split('-')[1]
@@ -94,11 +92,6 @@ def list_tenancy_resources(compartment_list):
 					instance_id=instance_id
 				).data
 
-				# Make sure there is volume available before adding it to the list
-				if len(volume_attachments) != 0:
-					for attached_volume in volume_attachments:
-						attached_volumes.append(attached_volume.volume_id)
-
 				# Find all boot volumes attached
 				boot_volume_attachments = oci.pagination.list_call_get_all_results(
 					compute_client.list_boot_volume_attachments,
@@ -108,9 +101,12 @@ def list_tenancy_resources(compartment_list):
 				).data
 
 				# Make sure there is volume available before adding it to the list
+				if len(volume_attachments) != 0 :
+					attached_volumes.append(volume_attachments[0].volume_id)
+
+				# Make sure there is volume available before adding it to the list
 				if len(boot_volume_attachments) != 0:
-					for attached_boot_volume in boot_volume_attachments:
-						attached_boot_volumes.append(attached_boot_volume.boot_volume_id)
+					attached_volumes.append(boot_volume_attachments[0].boot_volume_id)
 
 			search_spec = oci.resource_search.models.StructuredSearchDetails()
 			# search_spec.query = 'query all resources'
@@ -133,7 +129,6 @@ def list_tenancy_resources(compartment_list):
 					storage_gbs = ''
 					byol_flag = ''
 					volume_attachment_flag = ''
-					boot_vol_attachment_flag = ''
 
 					cid = resource.compartment_id
 					if cid is not None:
@@ -183,22 +178,19 @@ def list_tenancy_resources(compartment_list):
 						resource_detail = block_storage_client.get_volume(resource.identifier).data
 						storage_gbs = str(resource_detail.size_in_gbs)
 
-						if resource.identifier not in attached_volumes:
-							volume_attachment_flag = "Not Attached"
-						else:
-							volume_attachment_flag = "Attached"
 					elif resource.resource_type == 'BootVolume':
 						resource_detail = block_storage_client.get_boot_volume(resource.identifier).data
 						storage_gbs = str(resource_detail.size_in_gbs)
 
-						if resource.identifier not in attached_boot_volumes:
-							boot_vol_attachment_flag = "Not Attached"
-						else:
-							boot_vol_attachment_flag = "Attached"
-
 					elif resource.resource_type == 'BootVolumeBackup':
 						resource_detail = block_storage_client.get_boot_volume_backup(resource.identifier).data
 						storage_gbs = str(resource_detail.size_in_gbs)
+
+					if resource.resource_type == 'Volume' or resource.resource_type == 'BootVolume':
+						if resource.identifier not in attached_volumes:
+							volume_attachment_flag = "Not Attached"
+						else:
+							volume_attachment_flag = "Attached"
 
 					# Some items do not return a lifecycle state (eg. Tags)
 					# DBsystem state defined by Nodes (above)
@@ -223,7 +215,6 @@ def list_tenancy_resources(compartment_list):
 						'StorageGB': storage_gbs,
 						'BYOLstatus': byol_flag,
 						'VolAttached': volume_attachment_flag,
-						'BootVolAttached' : boot_vol_attachment_flag,
 						'Created': resource.time_created.strftime("%Y-%m-%d %H:%M:%S")
 					}
 
