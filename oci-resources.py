@@ -12,6 +12,7 @@
 # 06-sep-2019	Martin Bridge	Added detection of Non-BYOL database instances
 # 09-jan-2020	Martin Bridge	Use Node status to indicate real availability of database
 # 24-mar-2020	Mohamed Elkayal	Added check for unattached volumes
+# 26-mar-2020	Mohamed Elkayal	Added check for unattached boot volumes
 #
 import oci
 import sys
@@ -28,9 +29,10 @@ output_dir = "./log"
 # Output formats for readable, columns style output and csv files
 field_names = [
 	'Tenancy', 'Region', 'Compartment', 'Type', 'Name', 'State', 'DB',
-	'Shape', 'OCPU', 'StorageGB', 'BYOLstatus', 'VolAttached', 'Created' ]
-print_format = '{Tenancy:24s} {Region:9s} {Compartment:54s} {Type:20s} {Name:54.54s} {State:18s} {DB:4s} ' \
-		'{Shape:20s} {OCPU:>4s} {StorageGB:>9s} {BYOLstatus:10s} {VolAttached:12s} {Created:32s} '
+	'Shape', 'OCPU', 'StorageGB', 'BYOLstatus', 'VolAttached', 'BootVolAttached', 'Created' ]
+print_format = 	'{Tenancy:24s} {Region:9s} {Compartment:54s} {Type:20s} {Name:54.54s} {State:18s} {DB:4s} ' \
+				'{Shape:20s} {OCPU:>4s} {StorageGB:>9s} {BYOLstatus:10s} {VolAttached:12s}'\
+				'{BootVolAttached:12s} {Created:32s} '
 
 # Header format removes the named placeholders
 header_format = re.sub('{[A-Z,a-z]*', '{', print_format)
@@ -68,6 +70,7 @@ def list_tenancy_resources(compartment_list):
 		compute_client = oci.core.ComputeClient(config)
 		block_storage_client = oci.core.BlockstorageClient(config)
 		attached_volumes = []
+		attached_boot_volumes = []
 
 		# Parse region from uk-london-1 to london
 		region_name = region.region_name.split('-')[1]
@@ -82,6 +85,7 @@ def list_tenancy_resources(compartment_list):
 			for instance in instances.items:
 				compartment_id = instance.compartment_id
 				instance_id = instance.identifier
+				availability_domain=instance.availability_domain
 
 				# Find all volumes attached to instances
 				volume_attachments = oci.pagination.list_call_get_all_results(
@@ -94,6 +98,19 @@ def list_tenancy_resources(compartment_list):
 				if len(volume_attachments) != 0:
 					for attached_volume in volume_attachments:
 						attached_volumes.append(attached_volume.volume_id)
+
+				# Find all boot volumes attached
+				boot_volume_attachments = oci.pagination.list_call_get_all_results(
+					compute_client.list_boot_volume_attachments,
+					compartment_id=compartment_id,
+					instance_id=instance_id,
+					availability_domain=availability_domain
+				).data
+
+				# Make sure there is volume available before adding it to the list
+				if len(boot_volume_attachments) != 0:
+					for attached_boot_volume in boot_volume_attachments:
+						attached_boot_volumes.append(attached_boot_volume.boot_volume_id)
 
 			search_spec = oci.resource_search.models.StructuredSearchDetails()
 			# search_spec.query = 'query all resources'
@@ -116,6 +133,7 @@ def list_tenancy_resources(compartment_list):
 					storage_gbs = ''
 					byol_flag = ''
 					volume_attachment_flag = ''
+					boot_vol_attachment_flag = ''
 
 					cid = resource.compartment_id
 					if cid is not None:
@@ -173,6 +191,11 @@ def list_tenancy_resources(compartment_list):
 						resource_detail = block_storage_client.get_boot_volume(resource.identifier).data
 						storage_gbs = str(resource_detail.size_in_gbs)
 
+						if resource.identifier not in attached_boot_volumes:
+							boot_vol_attachment_flag = "Not Attached"
+						else:
+							boot_vol_attachment_flag = "Attached"
+
 					elif resource.resource_type == 'BootVolumeBackup':
 						resource_detail = block_storage_client.get_boot_volume_backup(resource.identifier).data
 						storage_gbs = str(resource_detail.size_in_gbs)
@@ -200,6 +223,7 @@ def list_tenancy_resources(compartment_list):
 						'StorageGB': storage_gbs,
 						'BYOLstatus': byol_flag,
 						'VolAttached': volume_attachment_flag,
+						'BootVolAttached' : boot_vol_attachment_flag,
 						'Created': resource.time_created.strftime("%Y-%m-%d %H:%M:%S")
 					}
 
