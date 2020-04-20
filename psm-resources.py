@@ -42,13 +42,17 @@ def list_psm_services(tenancy_name, username, password, idcs_guid):
 		f"{'Region':15} "
 		f"{'CreationDate':32} ")
 
-	for service_type in ["adbc", "andc", "apicsauto", "autoanalytics", "autoanalyticsinst", "autoblockchain", "bcsmgr",
+	service_type_list = ["adbc", "andc", "apicsauto", "autoanalytics", "autoanalyticsinst", "autoblockchain", "bcsmgr",
 						 "bdcsce", "botsaasauto", "cecsauto", "dbcs", "devserviceappauto", "dipcauto", "dipcinst",
 						 "integrationcauto", "jcs", "oabcsinst", "oehcs", "oehpcs", "oicinst", "omcexternal",
-						 "searchcloudapp", "soa", "ssi", "vbinst", "visualbuilderauto", "wtss"]:
+						 "searchcloudapp", "soa", "ssi", "vbinst", "visualbuilderauto", "wtss"]
+
+	# service_type_list = ["autoanalytics", "autoanalyticsinst",]
+
+	for service_type in service_type_list:
 		resp = requests.get(
 			"https://psm.europe.oraclecloud.com/paas/api/v1.1/instancemgmt/"
-			+ idcs_guid + "/services/" + service_type + "/instances",
+			+ idcs_guid + "/services/" + service_type + "/instances?limit=500",
 			auth=(username, password),
 			headers={'X-ID-TENANT-NAME': idcs_guid}
 		)
