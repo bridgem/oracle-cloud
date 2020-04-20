@@ -13,6 +13,7 @@
 # 09-jan-2020	Martin Bridge	Use Node status to indicate real availability of database
 # 24-mar-2020	Mohamed Elkayal	Added check for unattached volumes
 # 26-mar-2020	Mohamed Elkayal	Added check for unattached boot volumes
+# 20-apr-2020	Mohamed Elkayal	Fix for multiple attached volumes
 #
 import oci
 import sys
