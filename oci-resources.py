@@ -30,7 +30,7 @@ output_dir = "./log"
 field_names = [
 	'Tenancy', 'Region', 'Compartment', 'Type', 'Name', 'State', 'DB',
 	'Shape', 'OCPU', 'StorageGB', 'BYOLstatus', 'VolAttached', 'Created' ]
-print_format = 	'{Tenancy:24s} {Region:9s} {Compartment:54s} {Type:20s} {Name:54.54s} {State:18s} {DB:4s} ' \
+print_format = '{Tenancy:24s} {Region:9s} {Compartment:54s} {Type:20s} {Name:54.54s} {State:18s} {DB:4s} ' \
 				'{Shape:20s} {OCPU:>4s} {StorageGB:>9s} {BYOLstatus:10s} {VolAttached:12s} {Created:32s} '
 
 # Header format removes the named placeholders
@@ -116,12 +116,15 @@ def list_tenancy_resources(compartment_list):
 						attached_volumes.append(boot_volume_attachments[bootVolume].boot_volume_id)
 
 			search_spec = oci.resource_search.models.StructuredSearchDetails()
-			# search_spec.query = 'query all resources'
+			search_spec.query = 'query all resources'
 
-			search_spec.query = '''query AutonomousDatabase, BootVolume,
-			BootVolumeBackup, Bucket, Database, DbSystem, Image, Instance,
-			Volume, VolumeBackup resources
-			sorted by compartmentid asc'''
+			search_spec.query = '''query ApiGateway, AutonomousDatabase, BootVolume, 
+						BootVolumeBackup, Bucket, Database, DbSystem, FileSystem, 
+						FunctionsApplication, FunctionsFunction, Image, Instance,
+						IPSecConnection, MountTarget, NatGateway, RemotePeeringConnection, ServiceGateway,
+						Vault, VaultSecret,
+						Volume, VolumeBackup resources
+						sorted by compartmentid asc'''
 
 			resources = resource_search_client.search_resources(search_details=search_spec).data
 			for resource in resources.items:
@@ -228,7 +231,7 @@ def list_tenancy_resources(compartment_list):
 					format_output(output_dict)
 
 		except Exception as error:
-			print(f'Error {error.code} [{resource.resource_type}: {resource.display_name}]', file=sys.stderr)
+			print(f'Error:  [{resource.resource_type}: {resource.display_name}]', file=sys.stderr)
 	return
 
 
@@ -337,11 +340,14 @@ def csv_open(filename):
 def format_output(output_dict):
 	global csv_writer
 
-	# Readable format to stdout
-	print(print_format.format(**output_dict))
+	try:
+		# Readable format to stdout
+		print(print_format.format(**output_dict))
 
-	# CSV to file
-	csv_writer.writerow(output_dict)
+		# CSV to file
+		csv_writer.writerow(output_dict)
+	except Exception as error:
+		print(f'Error {error.code} [{output_dict}', file=sys.stderr)
 
 
 # Globals at tenancy level Regions & Compartments
