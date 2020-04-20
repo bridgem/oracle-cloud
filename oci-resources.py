@@ -231,7 +231,7 @@ def list_tenancy_resources(compartment_list):
 					format_output(output_dict)
 
 		except Exception as error:
-			print(f'Error:[{resource.resource_type}: {resource.display_name}]', file=sys.stderr)
+			print(f'Error:  [{resource.resource_type}: {resource.display_name}]', file=sys.stderr)
 	return
 
 
