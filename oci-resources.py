@@ -87,9 +87,6 @@ def list_tenancy_resources(compartment_list):
 				volume_length_check = 0
 				BootVol_length_check = 0
 
-				if instance.display_name == "OEM-Host":
-					print("")
-
 				# Find all volumes attached to instances
 				volume_attachments = oci.pagination.list_call_get_all_results(
 					compute_client.list_volume_attachments,
