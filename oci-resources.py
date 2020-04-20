@@ -13,6 +13,7 @@
 # 09-jan-2020	Martin Bridge	Use Node status to indicate real availability of database
 # 24-mar-2020	Mohamed Elkayal	Added check for unattached volumes
 # 26-mar-2020	Mohamed Elkayal	Added check for unattached boot volumes
+# 20-apr-2020	Mohamed Elkayal	Fix for multiple attached volumes
 #
 import oci
 import sys
@@ -83,10 +84,9 @@ def list_tenancy_resources(compartment_list):
 			for instance in instances.items:
 				compartment_id = instance.compartment_id
 				instance_id = instance.identifier
-				availability_domain=instance.availability_domain
-				volume_length_check = 0
-				BootVol_length_check = 0
-
+				availability_domain = instance.availability_domain
+				num_volume_attachments = 0
+				num_bootvol_attachments = 0
 
 				# Find all volumes attached to instances
 				volume_attachments = oci.pagination.list_call_get_all_results(
@@ -103,17 +103,17 @@ def list_tenancy_resources(compartment_list):
 					availability_domain=availability_domain
 				).data
 
-				volume_length_check = len(volume_attachments)
-				BootVol_length_check = len(boot_volume_attachments)
+				num_volume_attachments = len(volume_attachments)
+				num_bootvol_attachments = len(boot_volume_attachments)
 
 				# Make sure there is volume available before adding it to the list
-				if volume_length_check != 0 :
-					for volume in range(volume_length_check):
+				if num_volume_attachments != 0:
+					for volume in range(num_volume_attachments):
 						attached_volumes.append(volume_attachments[volume].volume_id)
 
 				# Make sure there is volume available before adding it to the list
-				if BootVol_length_check != 0:
-					for bootVolume in range(BootVol_length_check):
+				if num_bootvol_attachments != 0:
+					for bootVolume in range(num_bootvol_attachments):
 						attached_volumes.append(boot_volume_attachments[bootVolume].boot_volume_id)
 
 			search_spec = oci.resource_search.models.StructuredSearchDetails()
