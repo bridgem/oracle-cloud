@@ -358,7 +358,7 @@ if __name__ == '__main__':
 	else:
 		profile_name = sys.argv[1]
 
-	csv_writer = csv_open(profile_name)
+	csv_writer = csv_open(f"oci-{profile_name}")
 
 	# Get list of compartments
 	compartment_list = list_tenancy_info(profile_name)

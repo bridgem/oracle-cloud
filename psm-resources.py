@@ -157,7 +157,7 @@ if __name__ == "__main__":
 	else:
 		tenancy_name = sys.argv[1]
 
-	csv_writer = csv_open(tenancy_name)
+	csv_writer = csv_open(f"psm-{tenancy_name}")
 
 	tenancy_usage(tenancy_name)
 
