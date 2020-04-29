@@ -12,21 +12,29 @@
 # Output
 #		stdout, readable column format
 #
-# 27-nov-2019   1.0     mbridge     Created
+# 27-nov-2019      1.0     mbridge     Created
+# 22-april-2020    1.1     melkayal    Added support for CSV file output
 
 import requests
 import sys
 import configparser
 import os
 import json
+import csv
 
 # ======================================================================================================================
 debug: bool = False
 configfile = '~/.oci/config.ini'
+output_dir = "./log"
 # ======================================================================================================================
+
+field_names = [
+	'Tenancy', 'ServiceType', 'ServiceName', 'Creator', 'State', 'Region', 'CreationDate' ]
 
 
 def list_psm_services(tenancy_name, username, password, idcs_guid):
+
+	global csv_writer
 
 	if debug:
 		print(f'User:Pass = {username}/{"*" * len(password)}')
@@ -77,7 +85,19 @@ def list_psm_services(tenancy_name, username, password, idcs_guid):
 					f"{svc['region']:15} "
 					f"{svc['creationDate']:32} ")
 
-				# TODO: Handle isBYOL flag
+				output_dict = {
+					'Tenancy': tenancy_name,
+					'ServiceType': svc['serviceType'],
+					'ServiceName': svc['serviceName'],
+					'Creator': svc['creator'],
+					'State': svc['state'],
+					'Region': svc['region'],
+					'CreationDate' : svc['creationDate']
+				}
+
+				format_output(output_dict)
+
+		# TODO: Handle isBYOL flag
 	return
 
 
@@ -99,6 +119,35 @@ def tenancy_usage(tenancy_name):
 	# Get all service details
 	list_psm_services(tenancy_name, ini_data['username'], ini_data['password'], ini_data['idcs_guid'])
 
+def csv_open(filename):
+	csv_path = f'{output_dir}/{filename}.csv'
+
+	csv_file = open(csv_path, 'wt')
+
+	if debug:
+		print('CSV File : ' + csv_path)
+
+	csv_writer = csv.DictWriter(
+		csv_file,
+		fieldnames=field_names, delimiter=',',
+		dialect='excel',
+		quotechar='"', quoting=csv.QUOTE_MINIMAL)
+
+	csv_writer.writeheader()
+
+	return csv_writer
+
+
+# Output a line for each cloud resource (output_dict should be a dictionary)
+def format_output(output_dict):
+	global csv_writer
+
+	try:
+		# CSV to file
+		csv_writer.writerow(output_dict)
+	except Exception as error:
+		print(f'Error {error.code} [{output_dict}', file=sys.stderr)
+
 
 if __name__ == "__main__":
 	# Get profile from command line
@@ -107,6 +156,8 @@ if __name__ == "__main__":
 		sys.exit()
 	else:
 		tenancy_name = sys.argv[1]
+
+	csv_writer = csv_open(tenancy_name)
 
 	tenancy_usage(tenancy_name)
 

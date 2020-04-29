@@ -84,9 +84,7 @@ def list_tenancy_resources(compartment_list):
 			for instance in instances.items:
 				compartment_id = instance.compartment_id
 				instance_id = instance.identifier
-				availability_domain = instance.availability_domain
-				num_volume_attachments = 0
-				num_bootvol_attachments = 0
+				availability_domain=instance.availability_domain
 
 				# Find all volumes attached to instances
 				volume_attachments = oci.pagination.list_call_get_all_results(
@@ -103,18 +101,12 @@ def list_tenancy_resources(compartment_list):
 					availability_domain=availability_domain
 				).data
 
-				num_volume_attachments = len(volume_attachments)
-				num_bootvol_attachments = len(boot_volume_attachments)
+				# looping through all the volumes/bootVol attached and add it to the list
+				for volume in volume_attachments:
+					attached_volumes.append(volume.volume_id)
 
-				# Make sure there is volume available before adding it to the list
-				if num_volume_attachments != 0:
-					for volume in range(num_volume_attachments):
-						attached_volumes.append(volume_attachments[volume].volume_id)
-
-				# Make sure there is volume available before adding it to the list
-				if num_bootvol_attachments != 0:
-					for bootVolume in range(num_bootvol_attachments):
-						attached_volumes.append(boot_volume_attachments[bootVolume].boot_volume_id)
+				for bootVolume in boot_volume_attachments:
+					attached_volumes.append(bootVolume.boot_volume_id)
 
 			search_spec = oci.resource_search.models.StructuredSearchDetails()
 			search_spec.query = 'query all resources'
