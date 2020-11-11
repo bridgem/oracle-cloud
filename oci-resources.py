@@ -14,13 +14,21 @@
 # 24-mar-2020	Mohamed Elkayal	Added check for unattached volumes
 # 26-mar-2020	Mohamed Elkayal	Added check for unattached boot volumes
 # 20-apr-2020	Mohamed Elkayal	Fix for multiple attached volumes
+# 02-nov-2020	Martin Bridge	Added analytics, integration, ODA (new gen2 services)
 #
+
 import oci
 import sys
 import csv
 import time
 import re
 from string import Formatter
+
+# Enable debug logging
+#import logging
+#logging.basicConfig()
+#logging.getLogger('oci').setLevel(logging.DEBUG)
+
 
 ################################################################################################
 debug = False
@@ -30,12 +38,16 @@ output_dir = "./log"
 # Output formats for readable, columns style output and csv files
 field_names = [
 	'Tenancy', 'Region', 'Compartment', 'Type', 'Name', 'State', 'DB',
-	'Shape', 'OCPU', 'StorageGB', 'BYOLstatus', 'VolAttached', 'Created' ]
-print_format = '{Tenancy:24s} {Region:9s} {Compartment:54s} {Type:20s} {Name:54.54s} {State:18s} {DB:4s} ' \
-				'{Shape:20s} {OCPU:>4s} {StorageGB:>9s} {BYOLstatus:10s} {VolAttached:12s} {Created:32s} '
+	'Shape', 'OCPU', 'StorageGB', 'BYOLstatus', 'VolAttached', 'Created']
+print_format = '{Tenancy:24s} {Region:14s} {Compartment:54s} {Type:20s} {Name:54.54s} {State:18s} {DB:4s} ' \
+				'{Shape:20s} {OCPU:4} {StorageGB:>9s} {BYOLstatus:10s} {VolAttached:12s} {Created:32s} '
 
 # Header format removes the named placeholders
 header_format = re.sub('{[A-Z,a-z]*', '{', print_format)
+
+# Fixed strings
+BYOL = "BYOL"
+NONBYOL = "*NON-BYOL*"
 
 
 def debug_out(out_str):
@@ -68,15 +80,16 @@ def list_tenancy_resources(compartment_list):
 		resource_search_client = oci.resource_search.ResourceSearchClient(config)
 		db_client = oci.database.DatabaseClient(config)
 		compute_client = oci.core.ComputeClient(config)
+		analytics_client = oci.analytics.AnalyticsClient(config)
+		integration_client = oci.integration.IntegrationInstanceClient(config)
 		block_storage_client = oci.core.BlockstorageClient(config)
 		attached_volumes = []
 
-		# Parse region from uk-london-1 to london
-		region_name = region.region_name.split('-')[1]
-
-		debug_out('Resource Search ' + region_name)
+		debug_out('Resource Search ' + region.region_name)
 		try:
 
+
+			# Get a list of all instances and the volumes attached to them so we can later spot volumes that are unattached
 			instance_search_spec = oci.resource_search.models.StructuredSearchDetails()
 			instance_search_spec.query = '''query Instance resources'''
 			instances = resource_search_client.search_resources(search_details=instance_search_spec).data
@@ -84,7 +97,7 @@ def list_tenancy_resources(compartment_list):
 			for instance in instances.items:
 				compartment_id = instance.compartment_id
 				instance_id = instance.identifier
-				availability_domain=instance.availability_domain
+				availability_domain = instance.availability_domain
 
 				# Find all volumes attached to instances
 				volume_attachments = oci.pagination.list_call_get_all_results(
@@ -108,16 +121,40 @@ def list_tenancy_resources(compartment_list):
 				for bootVolume in boot_volume_attachments:
 					attached_volumes.append(bootVolume.boot_volume_id)
 
-			search_spec = oci.resource_search.models.StructuredSearchDetails()
-			search_spec.query = 'query all resources'
+			resource_types = [
+				"ApiGateway", "AutonomousDatabase", "Analyticsinstance",
+				"BootVolume", "BootVolumeBackup", "Bucket", "Database", "DbSystem",
+				"FileSystem", "FunctionsApplication", "FunctionsFunction",
+				"Image", "Instance", "Integrationinstance",
+				"MountTarget", "OceInstance",
+				"ODAinstance", "Vault", "VaultSecret", "Volume", "VolumeBackup"
+			]
 
-			search_spec.query = '''query ApiGateway, AutonomousDatabase, BootVolume, 
-						BootVolumeBackup, Bucket, Database, DbSystem, FileSystem, 
-						FunctionsApplication, FunctionsFunction, Image, Instance,
-						IPSecConnection, MountTarget, NatGateway, RemotePeeringConnection, ServiceGateway,
-						Vault, VaultSecret,
-						Volume, VolumeBackup resources
-						sorted by compartmentid asc'''
+			# resource_types += [ "NatGateway", "ServiceGateway" ]
+
+
+			# Resource types to find. New regions may not have all, so need to tailor search depending on region
+			# Currenly fails in San Jose region: IPSecConnection, RemotePeeringConnection,
+
+			try:
+				if region.region_name == 'uk-cardiff-1':
+					resource_types.remove('Analyticsinstance')
+					resource_types.remove('Integrationinstance')
+				elif region.region_name == 'us-sanjose-1':
+					resource_types.remove('OceInstance')
+			except ValueError:
+				pass  # ignore value errors
+
+			resource_type_list = ', '.join(resource_types)   # To comma sep string
+
+			query_filter = "where lifecycleState != 'DELETED'"
+			query_filter += "&& lifecycleState != 'TERMINATED' "
+			query_filter += "&& lifecycleState != 'Terminated' "
+			query_filter += "sorted by compartmentId asc"
+
+			search_spec = oci.resource_search.models.StructuredSearchDetails()
+			search_spec.query = "query all resources"
+			search_spec.query = f"query {resource_type_list} resources {query_filter}"
 
 			resources = resource_search_client.search_resources(search_details=search_spec).data
 			for resource in resources.items:
@@ -128,7 +165,7 @@ def list_tenancy_resources(compartment_list):
 
 					db_workload = ''
 					shape = ''
-					cpu_core_count = ''
+					cpu_core_count = 0
 					storage_gbs = ''
 					byol_flag = ''
 					volume_attachment_flag = ''
@@ -142,23 +179,21 @@ def list_tenancy_resources(compartment_list):
 					if resource.resource_type == 'Instance':
 						resource_detail = compute_client.get_instance(resource.identifier).data
 						shape = resource_detail.shape
-						# Get OCPU from last field of shape VM.Standard2.4
-						cpu_core_count = shape.split('.')[-1]
+						cpu_core_count = int(resource_detail.shape_config.ocpus)
 					elif resource.resource_type == 'AutonomousDatabase':
 						resource_detail = db_client.get_autonomous_database(resource.identifier).data
 						db_workload = resource_detail.db_workload
-						cpu_core_count = str(resource_detail.cpu_core_count)
+						cpu_core_count = resource_detail.cpu_core_count
 						storage_gbs = str(resource_detail.data_storage_size_in_tbs * 1024)
 						if resource_detail.license_model != "BRING_YOUR_OWN_LICENSE":
-							byol_flag = "*NON-BYOL*"
+							byol_flag = NONBYOL
 						else:
-							byol_flag = "BYOL"
+							byol_flag = BYOL
 					elif resource.resource_type == 'DbSystem':
 						resource_detail = db_client.get_db_system(resource.identifier).data
 						shape = resource_detail.shape
 						storage_gbs = str(resource_detail.data_storage_size_in_gbs)
-						# Get OCPU from last field of shape VM.Standard2.4
-						cpu_core_count = shape.split('.')[-1]
+						cpu_core_count = resource_detail.cpu_core_count
 						node_count = resource_detail.node_count
 
 						# Get status of DB Node instead of the dbsystem
@@ -174,9 +209,11 @@ def list_tenancy_resources(compartment_list):
 							shape = shape + '(x' + str(node_count) + ')'
 
 						if resource_detail.license_model != "BRING_YOUR_OWN_LICENSE":
-							byol_flag = "*NON-BYOL*"
+							byol_flag = NONBYOL
 						else:
-							byol_flag = "BYOL"
+							byol_flag = BYOL
+
+
 					elif resource.resource_type == 'Volume':
 						resource_detail = block_storage_client.get_volume(resource.identifier).data
 						storage_gbs = str(resource_detail.size_in_gbs)
@@ -188,6 +225,28 @@ def list_tenancy_resources(compartment_list):
 					elif resource.resource_type == 'BootVolumeBackup':
 						resource_detail = block_storage_client.get_boot_volume_backup(resource.identifier).data
 						storage_gbs = str(resource_detail.size_in_gbs)
+
+					elif resource.resource_type == 'AnalyticsInstance':
+						resource_detail = analytics_client.get_analytics_instance(resource.identifier).data
+						if resource_detail.capacity.capacity_type == 'OLPU_COUNT':
+							cpu_core_count = int(resource_detail.capacity.capacity_value)
+						if resource_detail.license_type != "BRING_YOUR_OWN_LICENSE":
+							byol_flag = NONBYOL
+						else:
+							byol_flag = BYOL
+
+					elif resource.resource_type == 'IntegrationInstance':
+						resource_detail = integration_client.get_integration_instance(resource.identifier).data
+						# metric is message packs:
+						if resource_detail.is_byol:
+							byol_flag = BYOL
+						else:
+							byol_flag = NONBYOL
+
+					# elif resource.resource_type == 'OdaInstance':
+					#resource_detail = oda_client.get_oda_instance(resource.identifier).data
+					# no useful metrics?
+
 
 					if resource.resource_type == 'Volume' or resource.resource_type == 'BootVolume':
 						if resource.identifier not in attached_volumes:
@@ -207,7 +266,7 @@ def list_tenancy_resources(compartment_list):
 
 					output_dict = {
 						'Tenancy': tenancy_name,
-						'Region': region_name,
+						'Region': region.region_name,
 						'Compartment': compartment_name,
 						'Type': resource.resource_type,
 						'Name': resource.display_name,
@@ -223,8 +282,14 @@ def list_tenancy_resources(compartment_list):
 
 					format_output(output_dict)
 
+		except oci.exceptions.ServiceError as e:
+			# print(f'Error {error['code']}:  {error['message']} (region={region})', file=sys.stderr)
+			print(f"Error: {e.code}, {e.message}  (region={region.region_name})", file=sys.stderr)
+
 		except Exception as error:
 			print(f'Error:  [{resource.resource_type}: {resource.display_name}]', file=sys.stderr)
+
+
 	return
 
 
@@ -278,34 +343,34 @@ def list_tenancy_info(profile):
 
 	tenancy_name = identity.get_tenancy(tenancy_id).data.name
 
-	print('Tenancy: ' + tenancy_name)
+	# print('Tenancy: ' + tenancy_name)
 
 	# Get Regions
-	print('Region Subscriptions: ')
+	# print('Region Subscriptions: ')
 	regions = identity.list_region_subscriptions(tenancy_id).data
-	for region in regions:
-		print(' ' + region.region_name)
-		identity.base_client.set_region(region.region_name)
+	# for region in regions:
+	# 	print(' ' + region.region_name)
+	# 	identity.base_client.set_region(region.region_name)
 
 		# Get Availability Domains
 		# ADs[region.region_name] = identity.list_availability_domains(tenancy_id).data
 		# for ad in ADs[region.region_name]:
 		# 	print(f'   {ad.name}')
 
-	# Get list of users
-	users = identity.list_users(tenancy_id).data
-	print('OCI Users: ')
-	for u in users:
-		print(f'{u.name:56} {u.description:32s}')
-	print('')
-
+	# # Get list of users
+	# users = identity.list_users(tenancy_id).data
+	# print('OCI Users: ')
+	# for u in users:
+	# 	print(f'{u.name:56} {u.description:32s}')
+	# print('')
+	#
 	# Get compartment list (Tenancy ocid is equivalent to the root compartment ocid)
 	compartment_list = get_compartment_list(tenancy_id)
 
-	print('Compartments: ')
-	for cc in compartment_list:
-		print(f"{cc['name']:30} {cc['path']:54} {cc['state']:8s} {cc['id']:84s}")
-	print('')
+	# print('Compartments: ')
+	# for cc in compartment_list:
+	# 	print(f"{cc['name']:30} {cc['path']:54} {cc['state']:8s} {cc['id']:84s}")
+	# print('')
 
 	return compartment_list
 
@@ -320,6 +385,7 @@ def csv_open(filename):
 
 	csv_writer = csv.DictWriter(
 		csv_file,
+		lineterminator='\n',
 		fieldnames=field_names, delimiter=',',
 		dialect='excel',
 		quotechar='"', quoting=csv.QUOTE_MINIMAL)
@@ -351,6 +417,7 @@ ADs = {}
 
 # Execute only if run as a script
 if __name__ == '__main__':
+
 	# Get profile name from command line
 	if len(sys.argv) != 2:
 		print(f'Usage: {sys.argv[0]} <profile_name>')
