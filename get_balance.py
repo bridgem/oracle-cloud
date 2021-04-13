@@ -51,7 +51,7 @@ def get_account_balance(report_time, tenancy_name, username, password, cloud_acc
 	resp = requests.get(
 		'https://itra.oraclecloud.com/metering/api/v1/cloudbucks/' + cloud_acct,
 		auth=(username, password),
-		headers={'X-ID-TENANT-NAME': idcs_guid}
+		headers={'X-ID-TENANT-NAME': idcs_guid, 'accept-encoding': '*'}
 	)
 
 	if resp.status_code != 200:
@@ -62,6 +62,7 @@ def get_account_balance(report_time, tenancy_name, username, password, cloud_acc
 		print('  {}'.format(msg), file=sys.stderr)
 
 	else:
+		i = resp.json()
 		for item in resp.json()['items']:
 
 			# Calculate amt consumed so far

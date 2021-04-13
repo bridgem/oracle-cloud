@@ -8,20 +8,21 @@
 # See: https://oc-blog.com/2020/01/22/undocumented-oci-pricelist-api/
 #
 # 20-jan-2020	Martin Bridge	Created
+# 13-apr-2021	Martin Bridge	Output currency code
 
 import requests
 
 # Example requests
 # https://itra.oraclecloud.com/itas/.anon/myservices/api/v1/products/10089
 # https://itra.oraclecloud.com/itas/.anon/myservices/api/v1/products?parentProductPartNumber=B88206&limit=500
-# https://itra.oraclecloud.com/itas/.anon/myservices/api/v1/products?partNumber=B88514
+# https://itra.oraclecloud.com/itas/.anon/myservices/api/v1/products?partNumber=B91128
 
 url = "https://itra.oraclecloud.com/itas/.anon/myservices/api/v1/products?limit=500"
 http_header = {'X-Oracle-Accept-CurrencyCode': 'GBP'}
 resp = requests.get(url, headers=http_header)
 
 # Columns headings
-print("PartNum|Category|Name|Metric|PAYG_price|Month_price}")
+print("PartNum|Category|Name|Metric|PAYG_price|Month_price|Currency}")
 
 nitems = 0
 for item in resp.json()['items']:
@@ -31,6 +32,7 @@ for item in resp.json()['items']:
 	# Some items do not have serviceCategoryDisplayName
 	partNum = item['partNumber']
 	name = item['shortDisplayName']
+	currency = item['currencyCode']
 	try:
 		category = item['serviceCategoryDisplayName']
 	except KeyError:
@@ -52,6 +54,6 @@ for item in resp.json()['items']:
 			if float(price['value']) < month_price:
 				month_price = float(price['value'])
 
-	print(f"{partNum}|{category}|{name}|{metric}|{payg_price}|{month_price}")
+	print(f"{partNum}|{category}|{name}|{metric}|{payg_price}|{month_price}|{currency}")
 
 print(f"{nitems} SKUs found")

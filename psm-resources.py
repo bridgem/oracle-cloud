@@ -7,7 +7,7 @@
 #   	username
 #   	password
 #   	idcs_id (idcs-4656dbcafeb47777d3efabcdef12...) from idcs url
-#   	domain_id (cacct-8b4b0c9b4c40173264564750985ff6... select users in services from myservices page)
+#   	domain_id (cacct-8b4b0c9b4c40173264564750985ff6... select idcs_users in services from myservices page)
 #
 # Output
 #		stdout, readable column format
@@ -21,6 +21,7 @@ import configparser
 import os
 import json
 import csv
+from datetime import datetime
 
 # ======================================================================================================================
 debug: bool = False
@@ -50,12 +51,29 @@ def list_psm_services(tenancy_name, username, password, idcs_guid):
 		f"{'Region':15} "
 		f"{'CreationDate':32} ")
 
-	service_type_list = ["adbc", "andc", "apicsauto", "autoanalytics", "autoanalyticsinst", "autoblockchain", "bcsmgr",
-						 "bdcsce", "botsaasauto", "cecsauto", "dbcs", "devserviceappauto", "dipcauto", "dipcinst",
-						 "integrationcauto", "jcs", "oabcsinst", "oehcs", "oehpcs", "oicinst", "omcexternal",
-						 "searchcloudapp", "soa", "ssi", "vbinst", "visualbuilderauto", "wtss"]
+	# Full list - many are now disabled/obsolete in some OCI accounts
+	# service_type_list = [
+	# 	"accs", "adbc", "adwc", "adwcp", "aiacs", "aipod", "analytics", "analyticssub", "andc", "andcp",
+	# 	"apicatalog", "apics", "apicsauto", "apicsautopod", "autoanalytics", "autoanalyticsinst", "autoanalyticspod",
+	# 	"autoblockchain", "bcsmgr", "bcsmgrpod", "bdcsce", "bigdataappliance", "botmxp", "botsaasauto",
+	# 	"botscfg", "botscon", "botsint", "botsmgm", "botspip", "botsxp", "caching", "cec", "cecauto", "cecs", "cecsauto",
+	# 	"container", "containerpod", "cxaana", "cxacfg", "cxacol", "cxapod", "dbcs", "demo",
+	# 	"devserviceapp", "devserviceappauto", "devservicepod", "devservicepodauto", "dhcs", "dics",
+	# 	"dipcauto", "dipcinst", "dipcpod", "erp", "ggcs", "integrationcauto", "integrationcloud",
+	# 	"iotassetmon", "iotconnectedwrker", "iotenterpriseapps", "iotfleetmon", "iotjls", "iotprodmonitoring", "iotsvcasset",
+	# 	"jcs", "mobileccc", "mobilecccom", "mobilecorepod", "mobilecorepodom", "mobileserviceauto",
+	# 	"mobilestandard", "mobilestdccc", "mobilestdcore", "mysqlcs", "oabcsinst", "oabcspod", "oaics",
+	# 	"oehcs", "oehpcs", "oicinst", "oicpod", "oicsubinst", "omce", "omcexternal", "omcp",
+	# 	"ratscontrolplane", "search", "searchcloudapp", "soa", "ssi", "ssip",
+	# 	# "stack",
+	# 	"vbinst", "vbpod", "visualbuilder", "visualbuilderauto", "wtss"]
 
-	# service_type_list = ["autoanalytics", "autoanalyticsinst",]
+
+	service_type_list = [ "adbc", "andc", "apicsauto", "autoanalytics", "autoanalyticsinst", "autoblockchain", "bcsmgr",
+						  "bdcsce", "botsaasauto", "cecsauto", "dbcs", "devserviceappauto", "dipcauto", "dipcinst",
+						  "integrationcauto", "jcs", "mobilestandard", "oabcsinst", "oehcs", "oehpcs", "oicinst", "omcexternal",
+						  "searchcloudapp", "soa", "ssi", "vbinst", "visualbuilderauto", "wtss"]
+
 
 	for service_type in service_type_list:
 		resp = requests.get(
@@ -76,14 +94,21 @@ def list_psm_services(tenancy_name, username, password, idcs_guid):
 			svc_list = resp.json()
 			for services in resp.json()['services'].items():
 				svc = services[1]
+
+				dttm = datetime.strptime(svc['creationDate'], "%Y-%m-%dT%H:%M:%S.%f%z")
+				create_date = datetime.strftime(dttm, "%Y-%m-%d %H:%M:%S")
+
+				# Region not always available (e.g. when service initializing)
+				reg = svc.get('region', "N/A")
+
 				print(
 					f"{tenancy_name:22} "
 					f"{svc['serviceType']:18} "
 					f"{svc['serviceName']:20.20} "
 					f"{svc['creator']:28.28} "
-					f"{svc['state']:10} "
-					f"{svc['region']:15} "
-					f"{svc['creationDate']:32} ")
+					f"{svc['state']:12} "
+					f"{reg:15} "
+					f"{create_date:32} ")
 
 				output_dict = {
 					'Tenancy': tenancy_name,
@@ -91,8 +116,8 @@ def list_psm_services(tenancy_name, username, password, idcs_guid):
 					'ServiceName': svc['serviceName'],
 					'Creator': svc['creator'],
 					'State': svc['state'],
-					'Region': svc['region'],
-					'CreationDate' : svc['creationDate']
+					'Region': reg,
+					'CreationDate' : create_date
 				}
 
 				format_output(output_dict)

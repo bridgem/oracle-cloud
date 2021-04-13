@@ -10,7 +10,7 @@
 #   	username
 #   	password
 #   	idcs_id (idcs-4656dbcafeb47777d3efabcdef12...) from idcs url
-#   	domain_id (cacct-8b4b0c9b4c40173264564750985ff6... select users in services from myservices page)
+#   	domain_id (cacct-8b4b0c9b4c40173264564750985ff6... select idcs_users in services from myservices page)
 #
 # Output
 #		stdout, readable column format
@@ -19,8 +19,11 @@
 # 25-jan-2018   1.1     mbridge     Handle overage charges in service costs
 # 31-oct-2019   1.2	    mbridge	    Simplified output using f-strings (requires python 3.6)
 # 10-feb-2020   1.3	    mbridge     Allow choice of CSV or tablular output
+# 29-may-2020	1.4		mbridge		Make end-date non-inclusive (i.e. start_date <= d < end_date)
+# 13-apr-2021	1.5		mbridge		Improved command line parameters using argparse
 
 import requests
+import argparse
 import sys
 from datetime import datetime, timedelta
 import configparser
@@ -68,6 +71,7 @@ def csv_init():
 
 	csv_writer = csv.DictWriter(
 		sys.stdout,
+		lineterminator='\n',
 		fieldnames=field_names, delimiter=',',
 		dialect='excel',
 		quotechar='"', quoting=csv.QUOTE_MINIMAL)
@@ -90,7 +94,7 @@ def get_account_charges(tenancy_name, username, password, domain, idcs_guid, sta
 	url_params = {
 		'startTime': start_time.isoformat() + '.000',
 		'endTime': end_time.isoformat() + '.000',
-		'usageType': 'MONTHLY',
+		'usageType': 'TOTAL',
 		'dcAggEnabled': 'N',
 		'computeTypeEnabled': 'Y'
 	}
@@ -98,8 +102,9 @@ def get_account_charges(tenancy_name, username, password, domain, idcs_guid, sta
 	resp = requests.get(
 		'https://itra.oraclecloud.com/metering/api/v1/usagecost/' + domain,
 		auth=(username, password),
-		headers={'X-ID-TENANT-NAME': idcs_guid},
-		params=url_params
+		headers={'X-ID-TENANT-NAME': idcs_guid, 'accept-encoding': '*'},
+		params=url_params,
+		timeout=600
 	)
 
 	if resp.status_code != 200:
@@ -176,7 +181,7 @@ def get_account_charges(tenancy_name, username, password, domain, idcs_guid, sta
 		return bill_total_cost, calc_total_cost
 
 
-def tenancy_usage(tenancy_name, start_date, end_date):
+def tenancy_usage(tenancy_name, start_date, end_date, grand_total):
 
 	# Just in case we use the tilde (~) home directory character
 	configfilepath = os.path.expanduser(configfile)
@@ -197,24 +202,42 @@ def tenancy_usage(tenancy_name, start_date, end_date):
 		ini_data['username'], ini_data['password'],
 		ini_data['domain'], ini_data['idcs_guid'],
 		datetime.strptime(start_date, '%d-%m-%Y'),
-		datetime.strptime(end_date, '%d-%m-%Y') + timedelta(days=1, seconds=-0.001))
+		datetime.strptime(end_date, '%d-%m-%Y')  # + timedelta(days=1, seconds=-0.001)
+	)
 
-	# Simple output as I use it to feed a report
-	print(f'{tenancy_name:24} {bill_total_cost:10.2f} {calc_total_cost:10.2f}')
+	if grand_total:
+		# Simple output as I use it to feed a report
+		print(f'{tenancy_name:24} {bill_total_cost:10.2f} {calc_total_cost:10.2f}')
 
 
 if __name__ == "__main__":
 	# Get profile from command line
-	if len(sys.argv) != 4:
-		print(f'Usage: {sys.argv[0]} <profile_name> <start_date> <end_date>')
-		print('       Where date format = dd-mm-yyyy')
-		sys.exit()
-	else:
-		tenancy_name = sys.argv[1]
-		start_date = sys.argv[2]
-		end_date = sys.argv[3]
+	parser = argparse.ArgumentParser(description='OCI Usage Costs')
 
-	tenancy_usage(tenancy_name, start_date, end_date)
+	# Positional
+	parser.add_argument('tenancy', help="Name of OCI tenancy (config profile name)")
+	parser.add_argument('start_date', help="Start date (dd-mm-yyyy')")
+	parser.add_argument('end_date', help="End date, inclusive (dd-mm-yyyy')")
+	parser.add_argument('--total', action=argparse.BooleanOptionalAction, default=True, help="Don't print grand total")
+
+	args = parser.parse_args()
+
+	tenancy_name = args.tenancy
+	start_date = args.start_date
+	end_date = args.end_date
+	grand_total = args.total
+
+	#
+	# if len(sys.argv) != 4:
+	# 	print(f'Usage: {sys.argv[0]} <profile_name> <start_date> <end_date>')
+	# 	print('       Where date format = dd-mm-yyyy')
+	# 	sys.exit()
+	# else:
+	# 	tenancy_name = sys.argv[1]
+	# 	start_date = sys.argv[2]
+	# 	end_date = sys.argv[3]
+
+	tenancy_usage(tenancy_name, start_date, end_date, grand_total)
 
 	if debug:
 		print('DONE')
