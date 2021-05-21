@@ -7,8 +7,6 @@ Scripts for managing and monitoring Oracle Cloud accounts
 
 `oci-resources.py` List all current instances of all OCI services in a given tenancy
 
-`psm-resources.sh` List instances of all PSM based services in a list of tenancies
-
 `psm-resources.py` List instances of all PSM based services in a given tenancy (profile)
 
 `oci-prices.py` Use pricing API to return all UC services and prices
