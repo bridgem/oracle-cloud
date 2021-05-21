@@ -3,6 +3,7 @@
 # Parameters:
 # 		profile_name
 # 		(credentials are then picked up from the config file)
+#		-c <compartment_id> - only show resources within this compartment and any subcompartments
 #
 # Output
 # 		stdout, readable column format
@@ -18,7 +19,7 @@
 # 17-nov-2020	Martin Bridge   Added Obj store and File system storage (GBytes)
 #                               Added resource OCID
 #                               Calculate object storage size
-# 12-apr-2021	Martin Bridge   TODO: Add compartment_id command line option
+# 12-apr-2021	Martin Bridge   Add compartment_id command line option
 #
 
 import oci
@@ -474,7 +475,6 @@ if __name__ == '__main__':
 	# Positional, required, tenancy (profile) name
 	parser.add_argument('profile_name', help="Name of OCI tenancy (config profile name)")
 	# Optional compartment id
-	# TODO: NOT YET USED
 	parser.add_argument('-c', '--compartment-id', dest='compartment_id', action='store',
 						metavar='<compartment id>', default="",
 						help='Compartment OCID', required=False)
