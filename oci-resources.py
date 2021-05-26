@@ -476,7 +476,7 @@ if __name__ == '__main__':
 	parser.add_argument('profile_name', help="Name of OCI tenancy (config profile name)")
 	# Optional compartment id
 	parser.add_argument('-c', '--compartment-id', dest='compartment_id', action='store',
-						metavar='<compartment id>', default="",
+						metavar='<compartment id>',
 						help='Compartment OCID', required=False)
 
 	args = parser.parse_args()
