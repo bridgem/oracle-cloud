@@ -21,6 +21,7 @@
 # 10-feb-2020   1.3	    mbridge     Allow choice of CSV or tablular output
 # 29-may-2020	1.4		mbridge		Make end-date non-inclusive (i.e. start_date <= d < end_date)
 # 13-apr-2021	1.5		mbridge		Improved command line parameters using argparse
+# 06-jul-2021	1.6		mbridge		Added list price lookup
 
 import requests
 import argparse
@@ -34,8 +35,6 @@ from string import Formatter
 import csv
 
 # ======================================================================================================================
-debug: bool = False
-detail: bool = True        # Report detailed breakdown of costs per service
 output_format = "CSV"	   # CSV or normal output, set to "CSV" or anything else
 configfile = '~/.oci/config.ini'
 # ======================================================================================================================
@@ -44,15 +43,15 @@ configfile = '~/.oci/config.ini'
 field_names = [
 	'Tenancy', 'ServiceName', 'ResourceName', 'SKU', 'Qty',
 	'UnitPrc', 'Total', 'Cur', 'OvrFlg', 'ComputeType',
-	'BillTotalCost', 'CalcUPrc', 'LineCost', 'CalcTotalCost']
+	'CalcUnitPrc', 'CalcLineCost', 'ListUnitPrc', 'ListLineCost']
 
 print_format = "{Tenancy:24} {ServiceName:24} {ResourceName:58.58} {SKU:6} {Qty:>10.3f} " \
 			   "{UnitPrc:>10.6f} {Total:>7.2f} {Cur:3} {OvrFlg:>6} {ComputeType:11.11} " \
-			   "{BillTotalCost:9.2f} {CalcUPrc:>10.6f} {LineCost:>8.2f} {CalcTotalCost:>9.2f}"
-# Header format removes the named placeholders
-header_format = re.sub('{[A-Z,a-z]*', '{', print_format)
-# Change number formats to string for heading output
-header_format = re.sub('\.[0-9]*f', 's', header_format)
+			   "{CalcUnitPrc:>10.6f} {CalcLineCost:>8.2f} " \
+			   "{ListUnitPrc:>10.6f} {ListLineCost:>7.2f}"
+
+header_format = re.sub('{[A-Z,a-z]*', '{', print_format)    # Header format removes the named placeholders
+header_format = re.sub('\.[0-9]*f', 's', header_format)     # Change number formats to string for heading output
 
 
 # Output a line for each cloud resource (output_dict should be a dictionary)
@@ -68,7 +67,6 @@ def format_output(output_dict, format):
 
 
 def csv_init():
-
 	csv_writer = csv.DictWriter(
 		sys.stdout,
 		lineterminator='\n',
@@ -81,8 +79,43 @@ def csv_init():
 
 	return csv_writer
 
+
+# Get simplified price list (SKU + prices)
+def get_price_list(currency_code):
+	url = "https://itra.oraclecloud.com/itas/.anon/myservices/api/v1/products?limit=500"
+	http_header = {'X-Oracle-Accept-CurrencyCode': currency_code}
+	resp = requests.get(url, headers=http_header)
+	items = resp.json()['items']
+
+	price_list = {}
+
+	for item in items:
+		partNum = item['partNumber']
+		payg_price = 0
+		month_price = 0
+
+		# Only look at first 2 pricing elements
+		# Some items, such as B88327 (Outbound Data Transfer) have a free amount before charging kicks in
+		# So for easy approximation, we will ignore charged amount
+		# TODO: Fix this horrible hack!
+		for price in item['prices'][:2]:
+
+			if price['model'] == 'PAY_AS_YOU_GO':
+				payg_price = float(price['value'])
+			elif price['model'] == 'MONTHLY_COMMIT':
+				month_price = float(price['value'])
+			else:
+				print(f"Unknown price type: {price['model']}")
+
+		price_list[partNum] = {"payg_price": payg_price, "month_price": month_price}
+
+	return price_list
+
+
 def get_account_charges(tenancy_name, username, password, domain, idcs_guid, start_time, end_time):
 	global csv_writer
+
+	price_list = get_price_list("GBP")
 
 	if debug:
 		print(f'User:Pass      = {username}/{"*" * len(password)}')
@@ -117,9 +150,9 @@ def get_account_charges(tenancy_name, username, password, domain, idcs_guid, sta
 		# Add the cost of all items returned
 		bill_total_cost = 0		# Ignores 'Do Not Bill' costs
 		calc_total_cost = 0		# Uses all quantities, but uses 'Usage' costs where available
+		list_total_cost = 0     # Total cost at list price
 		if detail:
 			# Print Headings
-			# Headings
 			if output_format == "CSV":
 				csv_writer = csv_init()
 			else:
@@ -128,7 +161,7 @@ def get_account_charges(tenancy_name, username, password, domain, idcs_guid, sta
 
 		items = resp.json()
 
-		for item in resp.json()['items']:
+		for item in items['items']:
 			# Each service could have multiple costs (e.g. in overage)
 			# Because of an anomoly in billing, overage amounts use the wrong unitPrice
 			# so take the unit price from the non-overage entry
@@ -159,26 +192,37 @@ def get_account_charges(tenancy_name, username, password, domain, idcs_guid, sta
 				if cost['computeType'] == 'Usage':
 					bill_total_cost += cost['computedAmount']
 
+				# Get list price of current item
+				partNum = item['gsiProductId']
+				try:
+					list_unit_price = price_list[partNum]['month_price']
+				except KeyError:
+					list_unit_price = 0.0
+
+				list_line_cost = cost['computedQuantity'] * list_unit_price
+				list_total_cost += list_line_cost
+
 				if detail:
 					output_dict = {
 						'Tenancy': tenancy_name,
 						'ServiceName': item['serviceName'],
 						'ResourceName': item['resourceName'],
-						'SKU': item['gsiProductId'],
+						'SKU': partNum,
 						'Qty': cost['computedQuantity'],
 						'UnitPrc': cost['unitPrice'],
 						'Total': cost['computedAmount'],
 						'Cur': item['currency'],
 						'OvrFlg': cost['overagesFlag'],
 						'ComputeType': cost['computeType'],
-						'BillTotalCost': bill_total_cost,
-						'CalcUPrc': calc_unit_price,
-						'LineCost': calc_line_item_cost,
-						'CalcTotalCost': calc_total_cost}
+						'CalcUnitPrc': calc_unit_price,
+						'CalcLineCost': calc_line_item_cost,
+						'ListUnitPrc': list_unit_price,
+						'ListLineCost': list_line_cost
+					}
 
 					format_output(output_dict, output_format)
 
-		return bill_total_cost, calc_total_cost
+		return bill_total_cost, calc_total_cost, list_total_cost
 
 
 def tenancy_usage(tenancy_name, start_date, end_date, grand_total):
@@ -197,7 +241,7 @@ def tenancy_usage(tenancy_name, start_date, end_date, grand_total):
 
 	# Show usage details
 	# Set time component of end date to 23:59:59.999 to match the behaviour of the Oracle my-services dashboard
-	bill_total_cost, calc_total_cost = get_account_charges(
+	bill_total_cost, calc_total_cost, list_total_cost = get_account_charges(
 		tenancy_name,
 		ini_data['username'], ini_data['password'],
 		ini_data['domain'], ini_data['idcs_guid'],
@@ -207,18 +251,20 @@ def tenancy_usage(tenancy_name, start_date, end_date, grand_total):
 
 	if grand_total:
 		# Simple output as I use it to feed a report
-		print(f'{tenancy_name:24} {bill_total_cost:10.2f} {calc_total_cost:10.2f}')
+		print(f'{tenancy_name:24} {bill_total_cost:10.2f} (Billed) {calc_total_cost:10.2f} (Corrected) {list_total_cost:10.2f} (List)')
 
 
 if __name__ == "__main__":
 	# Get profile from command line
-	parser = argparse.ArgumentParser(description='OCI Usage Costs')
+	parser = argparse.ArgumentParser(description='OCI usage costs from a tenancy')
 
 	# Positional
 	parser.add_argument('tenancy', help="Name of OCI tenancy (config profile name)")
 	parser.add_argument('start_date', help="Start date (dd-mm-yyyy')")
 	parser.add_argument('end_date', help="End date, inclusive (dd-mm-yyyy')")
-	parser.add_argument('--total', action=argparse.BooleanOptionalAction, default=True, help="Don't print grand total")
+	parser.add_argument('--no-total', dest='total', action='store_false', default=True, help="Print summary costs")
+	parser.add_argument('--debug', action='store_true', help="Print debug info")
+	parser.add_argument('--detail', action='store_true', help="Show detailed breakdown of costs per service ")
 
 	args = parser.parse_args()
 
@@ -226,18 +272,7 @@ if __name__ == "__main__":
 	start_date = args.start_date
 	end_date = args.end_date
 	grand_total = args.total
-
-	#
-	# if len(sys.argv) != 4:
-	# 	print(f'Usage: {sys.argv[0]} <profile_name> <start_date> <end_date>')
-	# 	print('       Where date format = dd-mm-yyyy')
-	# 	sys.exit()
-	# else:
-	# 	tenancy_name = sys.argv[1]
-	# 	start_date = sys.argv[2]
-	# 	end_date = sys.argv[3]
+	debug = args.debug
+	detail = args.detail
 
 	tenancy_usage(tenancy_name, start_date, end_date, grand_total)
-
-	if debug:
-		print('DONE')
