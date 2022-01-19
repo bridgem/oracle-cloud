@@ -23,16 +23,17 @@
 # 13-apr-2021	1.5		mbridge		Improved command line parameters using argparse
 # 06-jul-2021	1.6		mbridge		Added list price lookup
 
-import requests
 import argparse
-import sys
-from datetime import datetime, timedelta
 import configparser
-import os
-import json
-import re
-from string import Formatter
 import csv
+import json
+import os
+import re
+import sys
+from datetime import datetime
+from string import Formatter
+
+import requests
 
 # ======================================================================================================================
 output_format = "CSV"	   # CSV or normal output, set to "CSV" or anything else
@@ -88,8 +89,8 @@ def get_price_list(currency_code):
 	items = resp.json()['items']
 
 	price_list = {}
-
 	for item in items:
+
 		partNum = item['partNumber']
 		payg_price = 0
 		month_price = 0
@@ -98,16 +99,20 @@ def get_price_list(currency_code):
 		# Some items, such as B88327 (Outbound Data Transfer) have a free amount before charging kicks in
 		# So for easy approximation, we will ignore charged amount
 		# TODO: Fix this horrible hack!
-		for price in item['prices'][:2]:
 
-			if price['model'] == 'PAY_AS_YOU_GO':
-				payg_price = float(price['value'])
-			elif price['model'] == 'MONTHLY_COMMIT':
-				month_price = float(price['value'])
-			else:
-				print(f"Unknown price type: {price['model']}")
+		# Some items, such as 'B94418 - Oracle Cloud Program - Universal Credits - Research Cloud Starter',
+		# do not have a price entry, so skip
+		prices = item.get('prices', None)
+		if prices is not None:
+			for price in prices:
+				if price['model'] == 'PAY_AS_YOU_GO':
+					payg_price = float(price['value'])
+				elif price['model'] == 'MONTHLY_COMMIT':
+					month_price = float(price['value'])
+				else:
+					print(f"Unknown price type: {price['model']}")
 
-		price_list[partNum] = {"payg_price": payg_price, "month_price": month_price}
+			price_list[partNum] = {"payg_price": payg_price, "month_price": month_price}
 
 	return price_list
 

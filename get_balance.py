@@ -28,12 +28,12 @@
 # 17-dec-2018   1.0     mbridge     Created
 #
 
-import requests
+import configparser
+import datetime
+import json
 import os
 import sys
-import datetime
-import configparser
-import json
+import requests
 
 debug: bool = False
 configfile = '~/.oci/config.ini'

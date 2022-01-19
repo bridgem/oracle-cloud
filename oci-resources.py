@@ -3,7 +3,7 @@
 # Parameters:
 # 		profile_name
 # 		(credentials are then picked up from the config file)
-#		-c <compartment_id> - only show resources within this compartment and any subcompartments
+#       -c <compartment_id> - only show resources within this compartment and any subcompartments
 #
 # Output
 # 		stdout, readable column format
@@ -20,15 +20,17 @@
 #                               Added resource OCID
 #                               Calculate object storage size
 # 12-apr-2021	Martin Bridge   Add compartment_id command line option
+# 14-jan-2022   Martin Bridge   FIXED: Limit of 500 resources reported per region. Pagination for resource search added
 #
 
-import oci
-import sys
-import csv
-import time
-import re
-from string import Formatter
 import argparse
+import csv
+import re
+import sys
+import time
+from string import Formatter
+
+import oci
 
 # Enable debug logging
 # import logging
@@ -43,7 +45,7 @@ output_dir = "./log"
 
 # Output formats for readable, columns style output and csv files
 field_names = ['Tenancy', 'Region', 'Compartment', 'Type', 'Name', 'State', 'DB',
-			   'Shape', 'OCPU', 'GBytes', 'BYOLstatus',	'VolAttached', 'Created', 'CreatedBy', 'OCID']
+				'Shape', 'OCPU', 'GBytes', 'BYOLstatus',	'VolAttached', 'Created', 'CreatedBy', 'OCID']
 print_format = '{Tenancy:24s} {Region:14s} {Compartment:54s} {Type:26s} {Name:54.54s} {State:18s} {DB:4s} ' \
 				'{Shape:20s} {OCPU:4d} {GBytes:>8.3f} {BYOLstatus:10s} {VolAttached:12s} {Created:32s} {CreatedBy:32s} {OCID:120}'
 
@@ -84,6 +86,7 @@ def list_tenancy_resources(compartment_list, base_compartment_id):
 	csv_writer = csv_open(f"oci-{profile_name}")
 
 	# Search all resources
+	# for region in (r for r in regions if r.region_name == 'eu-frankfurt-1'):
 	for region in regions:
 
 		config['region'] = region.region_name
@@ -152,6 +155,7 @@ def list_tenancy_resources(compartment_list, base_compartment_id):
 			# ApiGateway 1M msgs/month
 			# OKE
 			# DataSafePrivateEndpoint (endpoints per month)
+			# bastion
 
 			resource_types = [
 				'autonomousdatabase', 'autonomouscontainerdatabase', 'analyticsinstance',
@@ -164,23 +168,25 @@ def list_tenancy_resources(compartment_list, base_compartment_id):
 				'mounttarget', 'oceinstance',
 				'odainstance', 'vault', 'vaultsecret', 'volume', 'volumegroup', 'volumebackup', 'volumegroupbackup'
 			]
-			# resource_types += [ 'NatGateway', 'ServiceGateway' ]
-			# resource_types = ['database','dbsystem']
 			# resource_types = ['all']
-			# resource_types = ['datacatalog']
 
 			# Some regions don't have all resource types, and query fails, so excelude certain types
 			try:
 				if region.region_name == 'us-sanjose-1':
 					resource_types.remove('oceinstance')
-					resource_types.remove('datasciencemodel')
-					resource_types.remove('datasciencenotebooksession')
-					resource_types.remove('datascienceproject')
+					# resource_types.remove('datasciencemodel')
+					# resource_types.remove('datasciencenotebooksession')
+					# resource_types.remove('datascienceproject')
+				elif region.region_name == 'eu-milan-1':
+					resource_types.remove('oceinstance')
+				elif region.region_name == 'eu-stockholm-1':
+					resource_types.remove('oceinstance')
 			except ValueError:
 				pass  # ignore value errors
 
 			resource_type_list = ', '.join(resource_types)   # To comma sep string
 
+			# Not interested in terminated resources
 			query_filter = "where lifecycleState != 'DELETED' "
 			query_filter += "&& lifecycleState != 'TERMINATED' "
 			query_filter += "&& lifecycleState != 'Terminated' "
@@ -191,18 +197,20 @@ def list_tenancy_resources(compartment_list, base_compartment_id):
 			search_spec = oci.resource_search.models.StructuredSearchDetails()
 			search_spec.query = f"query {resource_type_list} resources {query_filter}"
 
-			resources = resource_search_client.search_resources(search_details=search_spec).data
+			resources = oci.pagination.list_call_get_all_results(
+				resource_search_client.search_resources,
+				search_details=search_spec
+			).data
 
-			# Skip compartments as a resource type (OCI where clause doesn't seem to support this)
+			# Skip compartments as a resource type (OCI where clause doesn't seem to support this filter)
 			exclude_types = ['Compartment', 'User']
-			resource_generator = (r for r in resources.items if r.resource_type not in exclude_types)
+			resource_generator = (r for r in resources if r.resource_type not in exclude_types)
 			for resource in resource_generator:
 
 				debug_out(f'ID: {resource.identifier}, Type: {resource.resource_type}')
 
-				resource_name = '-'
-				if resource.display_name is not None:
-					resource_name = resource.display_name  # Some items do not have a display name (eg. Tag Namespace)
+				# Some items do not have a display name (eg. Tag Namespace)
+				resource_name = '-' if resource.display_name is None else resource.display_name
 
 				db_workload = ''
 				shape = ''
@@ -214,23 +222,17 @@ def list_tenancy_resources(compartment_list, base_compartment_id):
 				# Dynamic tag used to identify creator, missing on some resources
 				created_by = ''
 				try:
-					# Abbreviate oracleidentitycloudservice/<username>
-					# To         <username>
+					# Only interested in tracking down the creator (person), so strip off the
+					# oracleidentitycloudservice/ before the username
 					created_by = resource.defined_tags['Owner']['Creator'].replace('oracleidentitycloudservice/', '')
 				except:
 					# Ignore all errors such as tag missing
 					pass
 
 				# Some items do not return a lifecycle state (eg. Tags)
-				state = '-'
-				if resource.lifecycle_state is not None:
-					state = resource.lifecycle_state
+				state = '-' if resource.lifecycle_state is None else resource.lifecycle_state
 
-				cid = resource.compartment_id
-				if cid is not None:
-					compartment_name = get_compartment_name(cid, compartment_list)
-				else:
-					compartment_name = '-'
+				compartment_name = get_compartment_name(resource.compartment_id, compartment_list)
 
 				if resource.resource_type == 'Instance':
 					resource_detail = compute_client.get_instance(resource.identifier).data
@@ -252,34 +254,11 @@ def list_tenancy_resources(compartment_list, base_compartment_id):
 					db_workload = resource_detail.db_workload
 					cpu_core_count = resource_detail.cpu_core_count
 					storage_gbs = resource_detail.data_storage_size_in_tbs * 1024.0
-					if resource_detail.license_model != "BRING_YOUR_OWN_LICENSE":
-						byol_flag = NONBYOL
-					else:
-						byol_flag = BYOL
+					byol_flag = BYOL if resource_detail.license_model == "BRING_YOUR_OWN_LICENSE" else NONBYOL
+
 				elif resource.resource_type == 'Database':
 					resource_detail = db_client.get_database(resource.identifier).data
 					resource_name = resource_detail.db_name
-					# TODO: Backup size - not straightforward as incremental and only the total db size is available
-					# try:
-					# 	backups = db_client.list_backups(database_id=resource.identifier).data
-					# except oci.exceptions.ServiceError as e:
-					# 	print(f"NO DB BACKUP for {resource.display_name}")
-					# 	print(f"Error: {e.code}, {e.message}  (region={region.region_name})")
-					# else:
-					# 	print("DB BACKUP:")
-					# 	# print(backups)
-					#
-					# 	nbackups = 0
-					# 	nfailed_backups = 0
-					# 	backup_size = 0
-					# 	for bu in backups:
-					# 		if bu.lifecycle_state == "ACTIVE":
-					# 			nbackups += 1
-					# 			backup_size += bu.database_size_in_gbs
-					# 		elif bu.lifecycle_state == "FAILED":
-					# 			nfailed_backups += 1
-					#
-					# 	print(f"Backups: num={nbackups}, tot_size={backup_size}, nfailed={nfailed_backups}")
 
 				elif resource.resource_type == 'DbSystem':
 					resource_detail = db_client.get_db_system(resource.identifier).data
@@ -290,7 +269,7 @@ def list_tenancy_resources(compartment_list, base_compartment_id):
 
 					# Get status of DB Node instead of the dbsystem
 					# This more accurately reflects the status of the DB Server
-					node_list = db_client.list_db_nodes(cid, db_system_id=resource.identifier)
+					node_list = db_client.list_db_nodes(resource.compartment_id, db_system_id=resource.identifier)
 
 					state = 'STOPPED (NODE)'
 					for node in node_list.data:
@@ -300,10 +279,7 @@ def list_tenancy_resources(compartment_list, base_compartment_id):
 					if node_count is not None and node_count > 1:
 						shape = shape + '(x' + str(node_count) + ')'
 
-					if resource_detail.license_model != "BRING_YOUR_OWN_LICENSE":
-						byol_flag = NONBYOL
-					else:
-						byol_flag = BYOL
+					byol_flag = BYOL if resource_detail.license_model == "BRING_YOUR_OWN_LICENSE" else NONBYOL
 
 				elif resource.resource_type == 'Volume':
 					resource_detail = block_storage_client.get_volume(resource.identifier).data
@@ -321,25 +297,15 @@ def list_tenancy_resources(compartment_list, base_compartment_id):
 					resource_detail = analytics_client.get_analytics_instance(resource.identifier).data
 					if resource_detail.capacity.capacity_type == 'OLPU_COUNT':
 						cpu_core_count = int(resource_detail.capacity.capacity_value)
-					if resource_detail.license_type != "BRING_YOUR_OWN_LICENSE":
-						byol_flag = NONBYOL
-					else:
-						byol_flag = BYOL
+					byol_flag = BYOL if resource_detail.license_type == "BRING_YOUR_OWN_LICENSE" else NONBYOL
 
 				elif resource.resource_type == 'IntegrationInstance':
 					resource_detail = integration_client.get_integration_instance(resource.identifier).data
-					# metric is message packs:
-					if resource_detail.is_byol:
-						byol_flag = BYOL
-					else:
-						byol_flag = NONBYOL
+					byol_flag = BYOL if resource_detail.is_byol else NONBYOL
 
 				# Check if volumes are in use
 				if resource.resource_type == 'Volume' or resource.resource_type == 'BootVolume':
-					if resource.identifier not in attached_volumes:
-						volume_attachment_flag = "Not Attached"
-					else:
-						volume_attachment_flag = "Attached"
+					volume_attachment_flag = "Attached" if resource.identifier in attached_volumes else "Not Attached"
 
 				output_dict = {
 					'Tenancy': tenancy_name,
@@ -476,8 +442,8 @@ if __name__ == '__main__':
 	parser.add_argument('profile_name', help="Name of OCI tenancy (config profile name)")
 	# Optional compartment id
 	parser.add_argument('-c', '--compartment-id', dest='compartment_id', action='store',
-						metavar='<compartment id>',
-						help='Compartment OCID', required=False)
+	                    metavar='<compartment id>',
+	                    help='Compartment OCID', required=False)
 
 	args = parser.parse_args()
 

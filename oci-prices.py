@@ -15,8 +15,6 @@ import requests
 
 def print_price_list(currency_code):
 
-	price_list = []
-
 	# Example requests
 	# https://itra.oraclecloud.com/itas/.anon/myservices/api/v1/products/10089
 	# https://itra.oraclecloud.com/itas/.anon/myservices/api/v1/products?parentProductPartNumber=B88206&limit=500
@@ -25,7 +23,6 @@ def print_price_list(currency_code):
 	url = "https://itra.oraclecloud.com/itas/.anon/myservices/api/v1/products?limit=500"
 	http_header = {'X-Oracle-Accept-CurrencyCode': currency_code}
 	resp = requests.get(url, headers=http_header)
-
 
 	# Columns headings
 	print("PartNum|Category|Name|Metric|PAYG_price|Month_price|Currency}")
@@ -37,7 +34,7 @@ def print_price_list(currency_code):
 		# print(f"{item['displayName']:160} - {item['prices']}")
 
 		# Some items do not have serviceCategoryDisplayName
-		partNum = item['partNumber']
+		part_num = item['partNumber']
 		name = item['shortDisplayName']
 		currency = item['currencyCode']
 		try:
@@ -49,23 +46,28 @@ def print_price_list(currency_code):
 		except KeyError:
 			metric = "None"
 
-		payg_price = 1000000
-		month_price = 1000000
 		# Some items have a banded price, free up to a limit, then a charge beyond
 		# For simplicity, use the lowest price
-		for price in item['prices']:
-			if price['model'] == 'PAY_AS_YOU_GO':
-				if float(price['value']) < payg_price:
-					payg_price = float(price['value'])
-			elif price['model'] == 'MONTHLY_COMMIT':
-				if float(price['value']) < month_price:
-					month_price = float(price['value'])
+		payg_price = 1000000
+		month_price = 1000000
+		# Some items are free and have no price (e.g. 'B94418 - Oracle Cloud Program - ... - Research Cloud Starter')
+		if 'prices' in item:
+			for price in item['prices']:
+				if price['model'] == 'PAY_AS_YOU_GO':
+					if float(price['value']) < payg_price:
+						payg_price = float(price['value'])
+				elif price['model'] == 'MONTHLY_COMMIT':
+					if float(price['value']) < month_price:
+						month_price = float(price['value'])
+		else:
+			payg_price = 'n/a'
+			month_price = 'n/a'
 
-		print(f"{partNum}|{category}|{name}|{metric}|{payg_price}|{month_price}|{currency}")
+		print(f"{part_num}|{category}|{name}|{metric}|{payg_price}|{month_price}|{currency}")
 
 	print(f"{nitems} SKUs found")
 
 
 if __name__ == "__main__":
 
-	price_list = print_price_list("GBP")
+	print_price_list("GBP")
